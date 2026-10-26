@@ -25,9 +25,11 @@ CONTENTS
   PART 4  THE CALIBRATION AND ERROR FILES
             4.1 deadtime.py           GM-tube dead time
             4.2 angle_offset.py       zero of the angle scale
-            4.3 build_error_csvs.py   peak tables for 4.4 and 4.5
-            4.4 alignment_error.py    crystal alignment, repeatability
-            4.5 temperature_error.py  thermal expansion, angle stability
+            4.3 build_error_csvs.py   full-scan rate tables for 4.4, 4.5
+            4.4 alignment_error.py    crystal alignment; also the overlay
+                                      method of peak_overlay.py
+            4.5 temperature_error.py  crystal heating and run-to-run
+                                      stability
   PART 5  THE MAIN ANALYSIS, fits_copy.py, STAGE BY STAGE
   PART 6  THE ERROR BUDGET IN ONE PLACE
   PART 7  RESULTS
@@ -44,11 +46,13 @@ QUICK START
     python fits_copy.py
 
 Run it from this folder (the CSV files are read from the current folder).
-Seven figures open one at a time; close each window to get the next. All fit
-results, with their full error budgets, are printed to the terminal.
+Eight figures open one at a time; close each window to get the next. All fit
+results, with their full error budgets, are printed to the terminal. Every
+figure is also saved as a PNG in "figures" (save_figure.py), overwriting the
+last run's.
 
 Each calibration file can also be run on its own to see its own output and
-figure:
+figure (calib_1 to calib_4 in "figures"):
 
     python deadtime.py
     python angle_offset.py
@@ -61,7 +65,11 @@ fit describe each peak (a table of reduced chi-squared with errors, see
 
     python chi_squared.py
 
-The peak tables used by alignment_error.py and temperature_error.py are
+peak_overlay.py has no output of its own: it is the helper that
+alignment_error.py and temperature_error.py both use to find the shift
+between two scans (4.4).
+
+The full-scan CSVs used by alignment_error.py and temperature_error.py are
 already in "Error analysis CSVs". To rebuild them from the raw .xry files
 (only needed if the raw data change), run build_error_csvs.py. It reads the
 .xry files from the folder ABOVE its own, using the Tuesday / Thursday /
@@ -81,6 +89,10 @@ Data files (this folder)
     current_characterisation.csv  count rate against tube current
     Test_run_long_run4.csv        direct beam, no crystal
 
+Data files ("Error analysis CSVs" folder, made by build_error_csvs.py)
+    alignment_full_scans.csv      normal and flipped crystal full scans
+    temperature_full_scans.csv    unheated and heated crystal (Tuesday)
+
 Scripts and how the numbers flow between them
 
     current_characterisation.csv
@@ -95,12 +107,15 @@ Scripts and how the numbers flow between them
     raw .xry files                                                       |
             |                                                            |
         build_error_csvs.py                                              |
-            |   alignment_peak_positions.csv                             |
-            +-----> alignment_error.py --- sigma_align_constant, --------+
-            |                              sigma_repeat_pooled           |
-            |   temperature_peak_positions.csv                           |
-            +-----> temperature_error.py - thermal_d_over_d, ------------+
-                                           sigma_stability (check only)  |
+            |   alignment_full_scans.csv, temperature_full_scans.csv     |
+            |   (peak tables are also written, but nothing reads them)   |
+            v                                                            |
+        peak_overlay.py  (the overlay method, 4.4; uses tau)             |
+            |                                                            |
+            +-----> alignment_error.py ---------- sigma_align -----------+
+            |                                                            |
+            +-----> temperature_error.py -------- sigma_heat ------------+
+                                                                         |
                                                                          v
     the four spectrum CSVs  ------------------------------------>  fits_copy.py
                                                                    (8 figures,
@@ -159,8 +174,9 @@ of each run are stored in its .xry file and were read from there.
   3rd_Order_Long_Good    (n=3)     Friday    1.0     10 s   n=3 peak
   current scan                     -         0-1     10 s   dead time
   Test_run_long, column 4          Friday    0.1     10 s   zero offset
-  normal / flipped crystal scans   Thu, Fri  various 1-10 s alignment
-  unheated / heated full scans     Tuesday   1.0     1 s    temperature
+  normal_thu_0.6mA (normal)        Thursday  0.6     1 s    alignment
+  flipped_roll (crystal turned)    Friday    1.0     1 s    alignment
+  unheated / heated full scans     Tuesday   1.0     1 s    heating
 
 History that matters:
   - TUESDAY's runs were taken BEFORE the angle scale was fixed. Their peaks
@@ -171,13 +187,14 @@ History that matters:
     angle was set correctly and are not used (see the README in
     "Error analysis CSVs").
   - FRIDAY's normal-orientation scans agree with Thursday's to within
-    0.003-0.007 deg, so the setup did not change overnight. That is what
-    allows Thursday and Friday data to be combined.
+    0.003-0.007 deg (peak tables of 4.3), so the setup did not change
+    overnight. That is what allows Thursday and Friday data to be combined.
 
     WHY this matters: the n=2 and n=3 close-up scans are Friday data, while
     the full scan and the n=1 scan are Thursday data. Without the
     Thursday-Friday agreement check you could not put them on one angle
-    scale.
+    scale. The same check lets Friday's turned-crystal scan be compared
+    with Thursday's normal scan (4.4).
 
 1.3  The two "checkmarks"
 -------------------------
@@ -339,7 +356,7 @@ The same angle error does FIVE times less damage to the wavelength at n=3
 than at n=1. This is the single most important reason to prefer high
 orders for wavelengths. The same formula, read the other way, says an
 error in d moves the angle by -tan(theta) * (delta_d / d): high orders are
-also the most sensitive to a change in d (used in 4.5).
+also the most sensitive to a change in d (2.8).
 
 2.8  Thermal expansion
 ----------------------
@@ -349,8 +366,10 @@ Warming the crystal by delta_T stretches d by
 
 which moves every peak to a slightly LOWER angle, by tan(theta) * delta_d/d.
 Since tan(theta) grows with angle, real expansion shifts the n=3 peak about
-five times more than the n=1 peak. That pattern is how 4.5 tells expansion
-apart from a plain angle shift.
+five times more than the n=1 peak. 4.5 does not try to separate expansion
+from a plain angle drift: it measures the whole shift of the n=1 K-alpha
+peak when the crystal is heated and uses that as the error (see Part 9 for
+what this assumes at n=3).
 
 2.9  Dead time of a GM tube
 ---------------------------
@@ -507,7 +526,7 @@ together.
 
   - In a DIFFERENCE of two angles from the same scan, a shared angle shift
     CANCELS. Example: the doublet separation mu2 - mu1. Its alignment,
-    repeatability and zero-offset errors come out as exactly 0.
+    heating and zero-offset errors come out as exactly 0.
   - In an AVERAGE of results that share a systematic, that systematic does
     NOT average down. Averaging the n=1, 2, 3 wavelengths as if their errors
     were independent would understate the error. So quote the best single
@@ -531,6 +550,13 @@ points it passes through. Fitting a model to the spline instead of the data
 invents 2000 fake "measurements", ignores the error bars, and makes the
 answer depend on the interpolation method. So: splines for display only,
 every fit to the measured points.
+
+One exception, and why it is not the trap above: the overlay method (4.4)
+uses a cubic spline of one scan as the MODEL for another scan. The chi^2 is
+still summed over the measured points of the other scan only, with their
+own Poisson errors plus the spline's interpolated error, so no points are
+invented. Tests on synthetic peaks show the interpolation biases the shift
+by < 0.0005 deg.
 
 3.9  Gaussians: height versus area
 ----------------------------------
@@ -648,19 +674,34 @@ Part 9, item 1.
 HANDS TO fits_copy.py:  zero_offset, zero_offset_err.
 
 --------------------------------------------------------------------------------
-4.3  build_error_csvs.py - peak tables for the alignment and temperature runs
+4.3  build_error_csvs.py - rate tables for the alignment and heating runs
 --------------------------------------------------------------------------------
 Lives in "Error analysis CSVs". Reads the raw .xry files directly, so it
 also reads each run's current, gate time and voltage. Writes:
 
-    alignment_full_scans.csv, alignment_friday_normal_1st_order.csv,
+    alignment_full_scans.csv,
     temperature_full_scans.csv          the rates with Poisson errors
+                                        (raw, not dead-time corrected)
+                                        <- the only files used now
+    alignment_friday_normal_1st_order.csv
+                                        Friday's normal 1st-order scans
     alignment_peak_positions.csv,
     temperature_peak_positions.csv      fitted centre, height, FWHM, chi^2
                                         and shift of every line in every run
     runs_used.csv                       which file and column each run is
 
-METHOD for each line in each run:
+WHAT IS USED: only the two full-scan tables. peak_overlay.py (4.4) reads
+them, dead-time corrects the rates, and compares whole scans. The peak
+tables and the Friday 1st-order table are still written, and the
+Thursday-Friday check of 1.2 comes from them, but no script reads them.
+
+    WHY the peak tables were dropped: they give each line's centre from a
+    single Gaussian. The n=1 K-alpha peak is a doublet squashed by dead
+    time, and a Gaussian fits it with chi^2_nu of 30-300. The overlay of
+    4.4 compares the measured shapes directly and needs no peak model.
+
+HOW THE PEAK TABLES ARE MADE (for reference only), for each line in each
+run:
   1. Find the highest point inside the line's search window.
   2. Fit a Gaussian plus a straight-line background to +/-0.4 deg around it.
   3. If chi^2_nu > 1, scale the centre's error up by sqrt(chi^2_nu) (the
@@ -669,149 +710,266 @@ METHOD for each line in each run:
      centre wanders outside the window, or the height is below 3 sigma.
   5. Shift = this run's centre minus the reference run's centre; its error
      = both centre errors in quadrature.
-
-CHOICES AND WHY
-  - Local Gaussian + sloping line over +/-0.4 deg: these runs are full
-    scans with many lines; a small window around each peak with a local
-    straight baseline is enough to find the CENTRE, which is all these
-    files are for. No bremsstrahlung model is needed.
-  - Raw rates, no dead-time correction: dead time is symmetric about a
-    peak, so centres are unaffected. Consequence: the HEIGHTS (and the
-    "intensity per mA" ratios printed in 4.4) are distorted, because dead
-    time squashes high rates more than low ones. Treat those ratios as
-    rough.
-  - K-alpha at n=1 at 0.6 mA has chi^2_nu of 30-300: the peak is squashed
-    by dead time and is a doublet. The sqrt(chi^2_nu) scaling inflates its
-    error accordingly.
+  The rates are raw (no dead-time correction), so the heights and the
+  "per mA" columns are distorted: dead time squashes high rates more than
+  low ones. Treat them as rough.
 
 --------------------------------------------------------------------------------
 4.4  alignment_error.py - how much does crystal alignment move the peaks?
 --------------------------------------------------------------------------------
-QUESTION: the crystal sits in a holder. If it is slightly tilted, every
-peak appears at the wrong angle. How big could that error be?
+QUESTION: the crystal sits in a holder. If its lattice planes are slightly
+tilted, the peaks can appear at the wrong angle. How big could that error
+be?
 
-DATA (from 4.3): peak centres in
-    normal orientation:  Thursday 0.6 mA (REFERENCE), Thursday 0.12 mA,
-                         Friday 0.12 mA, Friday 0.6 mA
-    flipped about the ROLL axis (Friday), flipped about the YAW axis (Friday)
-Only the Cu K-alpha / K-beta lines; the tungsten side peaks are left out.
+THE PHYSICS: WHICH TILT MATTERS
+The planes can be tilted about two axes.
 
-PART A - REPEATABILITY. How much does the same peak move between repeat
-normal scans when nothing is deliberately changed? Sample standard
-deviation of each line's centre over the 2-4 normal runs, then POOLED over
-all lines:
+  (a) eps, a tilt about the VERTICAL axis (the goniometer axis). The
+      planes are turned within the scattering plane, so the tilt simply
+      adds to the crystal angle:
 
-    pooled sigma_repeat = sqrt( sum of (runs-1) * std^2  /  sum of (runs-1) )
-                        = 0.0143 deg   (7 degrees of freedom)
+          theta_measured = theta_Bragg + eps
 
-    WHY pooled: each line has only 2-4 runs. A standard deviation from 2
-    values is itself uncertain by ~70%. Pooling assumes all lines share
-    the same repeatability (reasonable: it is the same goniometer) and
-    gives a much steadier number. The per-line values are printed for
-    comparison (0.005-0.032 deg; the 0.032 is n=3 K-alpha from weak 1 s
-    scans, fit errors ~0.025 deg, so mostly noise).
+      the SAME at every angle and every order. A first-order effect.
 
-PART B - ALIGNMENT SHIFT. Shift of each line in the flipped scans relative
-to the reference. Fitted with
+            TOP VIEW (vertical axis O points out of the page)
 
-    shift = a + b tan(theta)
+                                   / to GM tube, at 2 theta
+                                 /
+                               /      _ - lattice planes, at theta
+                             /   _ -       (really at theta + eps)
+          beam ------------>O - - - - - - - - - - - -
 
-  a = a constant angle shift (tilt, zero-type error)
-  b = a change that grows like tan(theta), i.e. looks like a change in d
+  (b) psi, a tilt about the BEAM axis. The plane normal leans out of the
+      scattering plane. Bragg's law is then met when
+      sin(theta_Bragg) = sin(theta) cos(psi), so
 
-    roll:  a = -0.1274 +/- 0.0171 deg,  b = -0.0004 +/- 0.0429 (0.0 sigma)
-           constant only: a = -0.1275 +/- 0.0062 deg, chi^2_nu = 0.34
-    yaw:   only 2 lines found; constant only a = -0.0665 +/- 0.0150 deg
+          theta_measured = theta_Bragg + (psi^2 / 2) tan(theta)
 
-The roll shift is the SAME for every line (b is zero) and 13-23x each
-line's own repeatability (about 9x the pooled value): a real, constant
-tilt effect.
+      a SECOND-order effect: for psi = 1 deg it is 0.0025 deg at n=1 and
+      0.012 deg at n=3. Its main effect is on INTENSITY: the reflected
+      beam is tipped out of the scattering plane and partly misses the
+      detector. Neglected.
 
-    sigma_align = |a_roll| / 2 = 0.0637 deg
+            VIEW ALONG THE BEAM (beam goes into the page at O)
+
+                          | vertical
+                          |        _ - plane normal, tilted up by psi
+                          |   _ -
+            --------------O-------------------  normal as set (horizontal)
+
+THE FLIP. Only one flip was physically done: the crystal was turned 180
+deg about the BEAM axis in its holder (Friday, Task 3). Write the plane
+normal as (along the beam, sideways, vertical) = (eps, 1, psi), for the
+crystal at theta = 0. The turn makes it (eps, -1, -psi). The planes are
+the same planes whichever way their normal points, so this is the same as
+(-eps, 1, psi): eps reverses and psi does not.
+
+    normal orientation:   theta_measured = theta_Bragg + eps
+    turned 180 deg:       theta_measured = theta_Bragg - eps
+
+    shift (turned - normal) = -2 eps,     sigma_align = |shift| / 2
+
+psi is the same before and after, so it would not show in the shift
+anyway.
+
+DATA (alignment_full_scans.csv, from 4.3):
+    normal_thu_0.6mA   normal orientation, Thursday after the angle fix,
+                       0.6 mA, 1 s per step, 0.1 deg step     REFERENCE
+    flipped_roll       crystal turned 180 deg about the beam axis (the
+                       column keeps its old name), Friday, 1.0 mA, 1 s per
+                       step, 0.1 deg step, 2.5-30 deg
+A second file, Flipped_Yaw.xry, is also in the data (and in the CSV) but
+is not used: it was not a deliberate flip.
+
+    WHY this normal scan: same 1 s gate and 0.1 deg step as the turned
+    scan. Only the current differs (0.6 against 1.0 mA), and the overlay's
+    free scale factor A absorbs that.
+
+THE OVERLAY METHOD (peak_overlay.py, also used by 4.5)
+IDEA: if two scans show the same peak, one is just the other slid sideways
+and scaled. So slide the reference scan across the other scan and find the
+shift at which they match best.
+
+  1. Load both scans and dead-time correct them (tau from 4.1), with
+     Poisson errors from the raw counts (3.1, 3.2).
+  2. Put a cubic spline through the REFERENCE scan (and one through its
+     errors), so it can be read off between its 0.1 deg steps.
+  3. For each trial shift delta, from -0.25 to +0.25 deg in 0.0005 deg
+     steps, fit the other scan inside a window around the peak with
+
+         y(beta) = A * reference(beta - delta) + c0 + c1 (beta - mean)
+
+         A        scale: absorbs a different current or reflectivity
+         c0, c1   a different background level and tilt
+
+     These enter linearly, so each trial is a quick linear least-squares
+     fit. Each point's error is its own Poisson error and A times the
+     reference's interpolated error, in quadrature (A is iterated 3 times,
+     since the weights depend on it).
+  4. That gives chi^2(delta). Fit a parabola to it near the minimum (+/-
+     0.01 deg). The shift is the bottom of the parabola; its statistical
+     error is where chi^2 rises by 1. dof = points - 4 (A, c0, c1, delta).
+     If chi^2_nu > 1 the error is scaled up by sqrt(chi^2_nu), as in 3.4.
+  5. Do it BOTH WAYS ROUND: the scan onto the reference, then the
+     reference onto the scan (window moved by the first shift, so it
+     covers the same peak). If the two peaks have the same shape the two
+     answers agree. The shift is their mean; HALF THEIR DIFFERENCE is a
+     "method error", a measure of how much a change of shape biases the
+     shift. It is added in quadrature to the statistical error.
+
+  Only points that stay inside the reference scan for EVERY trial shift
+  are used, so every trial is judged on the same points.
+
+        chi^2
+          |  \                          /
+          |   \                        /
+          |    \                      /
+          | - - \ - - - - - - - - - -/- - -  chi^2_min + 1
+          |      `.                .'
+          |        `-.__________.-'          chi^2_min
+          +-----|---------+----------|----  trial shift delta
+                |       shift        |
+                <--- shift +/- stat ->
+
+VALIDATION: on synthetic K-alpha doublets sampled at the same 0.1 deg step,
+known shifts of 0.03-0.13 deg come back to within 0.0005 deg, so reading
+the spline between the steps does not bias the shift. Changing tau by its
+error moves the shifts by < 0.001 deg.
+
+    WHY THE OVERLAY, not the difference of fitted Gaussian centres (what an
+    earlier version did, from the peak tables of 4.3):
+      - No peak shape is assumed. The n=1 K-alpha peak is a doublet that
+        one Gaussian fits badly; the overlay uses the measured shape as it
+        is.
+      - The both-ways test shows directly whether the shape changed, which
+        a difference of centres cannot.
+
+WHICH PEAK: the 1st-order K-alpha peak, window 15.7-16.6 deg (the whole
+doublet). The 1st-order K-beta peak (window 14.2-14.9 deg) is overlaid as
+a CROSS-CHECK only.
+    WHY: K-alpha is the line the main analysis measures (Part 5), and the
+    n=1 peak is the strongest. The turned scan stops at 30 deg, so it does
+    not contain the n=2 and n=3 K-alpha peaks (33 and 55 deg).
+
+RESULT (positive shift = turned crystal at higher angle):
+    K-alpha n=1  shift = -0.1089 +/- 0.0087 deg
+                 stat 0.0085, method 0.0018; one way -0.1107, other way
+                 -0.1071; chi^2_nu 27.0 / 42.1
+    K-beta n=1   shift = -0.1304 +/- 0.0072 deg       [cross-check only]
+                 stat 0.0072, method 0.0006; chi^2_nu 7.1 / 1.4
+
+    sigma_align = |K-alpha n=1 shift| / 2 = 0.0544 +/- 0.0043 deg
+    (the K-beta cross-check would give 0.0652 deg)
+
+As a fractional error on a wavelength (or on d), cot(theta) x sigma_align
+(2.7):
+    n=1  3.3e-3        n=2  1.5e-3        n=3  6.7e-4
+
+WHY chi^2_nu IS 27-42: the turned crystal's K-alpha doublet has a slightly
+different SHAPE (broader, flatter top). No shift and scale can make the two
+match exactly; the residuals reach ~1500/s at the top of the peak. The
+sqrt(chi^2_nu) scaling (x5-6.5) puts this into the statistical error, and
+the both-ways test gives only 0.0018 deg, so the shape change hardly moves
+the shift itself. K-beta keeps its shape better (chi^2_nu 7.1 and 1.4) but
+gives a shift 0.02 deg larger (1.9 sigma apart). See Part 9.
+
+FIGURE calib_3_alignment_error.png, three panels:
+  left    the 1st-order region: the turned scan (points), the normal scan
+          before the shift (dotted, scaled to the same height) and after it
+          (solid); the K-alpha fit window shaded
+  middle  the K-alpha n=1 window close up, residuals underneath
+  right   chi^2 against trial shift, divided by max(chi^2_nu, 1) so that
+          the "+1" line gives the statistical error: K-alpha both ways
+          round, K-beta one way as the cross-check, the result as a band,
+          and a text box with the shift and sigma_align
 
 CHOICES AND WHY
-  - HALF the shift: if flipping the crystal reverses the misalignment,
-    normal = true + e and flipped = true - e, so the shift is 2e and the
-    true centre lies MIDWAY. The normal scan is then off by e = half the
-    shift.
+  - HALF the shift: the turn reverses eps, so normal = true + eps and
+    turned = true - eps. The shift is 2 eps and the true angle lies
+    MIDWAY. The normal scans, which the main analysis uses, are off by
+    eps = half the shift.
+  - ONE FLIP IS ENOUGH: eps is the only tilt that moves the peaks to first
+    order, and a turn about the beam axis is exactly the move that reverses
+    it. psi is second order and does not reverse anyway.
   - Used as an UNCERTAINTY (+/-), not a correction. Two reasons:
-     (1) we do not know the flip reverses the error exactly;
+     (1) we do not know the turn reverses the error exactly (the peak shape
+         changed, so the turn changed more than just the tilt);
      (2) the evidence is contradictory. Applying it as a correction (all
-         angles 0.064 deg lower) brings the K-alpha1 peaks closer to
-         Bragg (+0.16 -> +0.10 deg) but pushes U from 35.83 to 36.47 kV,
-         further from the 35 kV set on the tube. Moving the other way does
-         the reverse (U 35.21 kV, K-alpha1 off by +0.23 deg). No single
-         constant shift fixes both, so it is honest to carry it as an
-         error rather than pretend to know the true value.
-  - ROLL, not yaw: the roll-flipped crystal still gave strong peaks (both
-    orders, 3 lines) with a constant shift. After the yaw flip the
-    intensity fell ~10x relative to the roll flip and only 2 lines could
-    be fitted: the crystal was badly misaligned, so yaw is a worst case,
-    not a typical error. It is printed as a cross-check only.
-  - One CONSTANT value for every line: b = 0 means the error does not
-    grow with angle, so the same 0.0637 deg applies at 3.6 deg (the
-    bremsstrahlung onset) and at 55 deg (n=3), where no flipped scan was
-    taken. This is an extrapolation and is stated as such.
+         angles 0.054 deg lower) brings the K-alpha1 peaks closer to
+         Bragg (n=1: +0.16 -> about +0.11 deg) but pushes U from 35.83 to
+         about 36.4 kV, further from the 35 kV set on the tube. Moving the
+         other way does the reverse (U about 35.3 kV, K-alpha1 off by
+         about +0.22 deg). No single constant shift fixes both, so it is
+         honest to carry it as an error rather than pretend to know the
+         true value.
+  - ONE CONSTANT value at every angle: by the physics above, eps adds the
+    same amount at every angle and order. So the same 0.0544 deg applies
+    at 3.6 deg (the bremsstrahlung onset) and at 33 and 55 deg (n=2, n=3),
+    which the turned scan does not reach. This rests on the physics, not on
+    a measurement at those angles.
+  - K-alpha, not K-beta, sets the number: it is the line being measured.
 
-HANDS TO fits_copy.py:  sigma_align_constant = 0.0637 deg,
-                        sigma_repeat_pooled  = 0.0143 deg.
+WATCH OUT: the normal scan is Thursday's and the turned one Friday's, so
+the shift also holds any overnight change. 1.2 puts that at 0.003-0.007
+deg, small next to 0.109 deg.
+
+HANDS TO fits_copy.py:  sigma_align = 0.0544 deg
+                        (its error, 0.0043 deg, is printed but not used).
 
 --------------------------------------------------------------------------------
-4.5  temperature_error.py - does temperature change d?
+4.5  temperature_error.py - does heating the crystal move the peaks?
 --------------------------------------------------------------------------------
-QUESTION: d = 282.01 pm is the value at room temperature. If the crystal
-was warmer or cooler, d was different, and every wavelength from Bragg's
-law is off by the same fraction.
+QUESTION: d = 282.01 pm is the value at room temperature. A warmer crystal
+has a larger d, so its peaks sit at lower angles (2.8). The angle scale may
+also drift a little between runs. How far can the peaks move between two
+runs for these reasons?
 
-DATA (from 4.3): Tuesday's unheated and heated full scans. Tuesday is
-before the angle fix, so only the heated-minus-unheated SHIFT of each line
-is used; any constant offset common to both runs cancels.
+DATA (temperature_full_scans.csv, from 4.3): Tuesday's two full scans with
+identical settings (1.0 mA, 1 s per step, 0.1 deg step): the crystal at
+room temperature ("unheated", REFERENCE) and the crystal heated by the
+lamp ("heated").
 
-METHOD: 2.8 says expansion shifts each line by -tan(theta) delta_d/d, while
-an angle-scale drift between the two runs shifts every line equally.
-Fit the five shifts with
+METHOD: the overlay of 4.4, on the 1st-order K-alpha peak, with K-beta n=1
+again as a cross-check only. Tuesday is before the angle fix, so its peaks
+sit ~0.12 deg higher: both windows are moved up by 0.12 deg
+(tuesday_offset in peak_overlay.py). Only the shift BETWEEN the two runs is
+used, so any offset common to both cancels. The figure,
+calib_4_temperature_error.png, has the same three panels as calib_3.
 
-    shift = delta_beta_0 - tan(theta) * delta_d/d
+RESULT (negative = heated peak at lower angle):
+    K-alpha n=1  shift = -0.0140 +/- 0.0038 deg
+                 stat 0.0038, method 0.0005; chi^2_nu 3.5 / 4.7
+    K-beta n=1   shift = -0.0137 +/- 0.0042 deg       [cross-check only]
 
-and with each term alone:
+    sigma_heat = |K-alpha n=1 shift| = 0.0140 +/- 0.0038 deg
 
-    both terms        delta_beta_0 = -0.0147 +/- 0.0063 deg,
-                      delta_d/d = (-1.0 +/- 2.8)e-4,  chi^2_nu = 0.09
-    constant only     delta_beta_0 = -0.0127 +/- 0.0030 deg, chi^2_nu = 0.10
-    expansion only    delta_d/d = (+4.7 +/- 1.3)e-4,  chi^2_nu = 1.44
+Here the peak shape barely changes (chi^2_nu 3.5-4.7, method error 0.0005
+deg) and K-beta agrees with K-alpha.
 
-CONCLUSION: the shifts do NOT grow with tan(theta); a constant shift
-explains them as well as both terms together. No expansion is detected.
-Upper limit (heating can only increase d, so one-sided, 2 sigma):
-delta_d/d < 4.5e-4, i.e. the crystal warmed by less than ~11 K.
+CHOICES AND WHY
+  - THE WHOLE SHIFT, not half: nothing is reversed here, so there is no
+    midpoint to take. The shift itself is the size of the effect: how far
+    the peaks can move between two runs.
+  - Applied as an ANGLE error, like the alignment (5.4): one shift of
+    every angle. It covers everything that changed between two runs taken
+    the same day with nothing touched in the goniometer: thermal expansion
+    of the crystal AND any drift of the angle scale. It does not try to
+    split the two.
+  - It REPLACES a separate repeatability error. Two same-day runs with
+    nothing touched is exactly what a repeatability error describes, so
+    sigma_heat already holds the run-to-run scatter. Adding a repeatability
+    term as well would count the same effect twice.
+  - An independent check of the size (5.11, point (1)): two n=2 scans
+    taken the same day need a shift of 0.0136 +/- 0.0011 deg to match,
+    the same as sigma_heat.
 
-    WHY not use the per-line "delta_d_over_d" column of the peak table: it
-    assumes each shift is pure expansion. At n=1 a small constant angle
-    shift then looks like a big expansion (cot theta is large), giving
-    ~9e-4, an overestimate. Fitting all lines together separates the two.
-    WHY chi^2_nu so far below 1 (0.09): the centre errors from 4.3 were
-    already scaled up by sqrt(chi^2_nu) of each peak fit, so they are
-    generous. That is fine for an upper limit (conservative).
+WATCH OUT: this is ONE pair of runs, so sigma_heat is itself uncertain by
+0.0038 / 0.0140 = 27%. It was measured at n=1 only; using it as a constant
+angle shift at n=2 and n=3 is a choice (Part 9).
 
-TWO NUMBERS FOR THE ERROR BUDGET:
-  - THERMAL: the lab temperature during the real measurements is uncertain
-    by sigma_T, so d is uncertain by
-
-        sigma_d/d = alpha sigma_T = 40e-6/K x 2 K = 8e-5
-
-    sigma_T = 2 K is an ASSUMPTION (set at the top of the file). Replace it
-    with the recorded lab temperature if you have one. This error is
-    applied to d itself, so it reaches every wavelength (5.10).
-  - ANGLE STABILITY: delta_beta_0 = 0.0147 deg is an angle drift between
-    two runs taken the same day. That is the SAME kind of error as the
-    repeatability of 4.4 (0.0143 deg), and the same size. Adding both
-    would count one effect twice, so fits_copy.py uses the repeatability
-    and prints this only as an independent cross-check. The agreement of
-    the two (0.0143 vs 0.0147) is good evidence that ~0.014 deg is the real
-    run-to-run angle reproducibility.
-
-HANDS TO fits_copy.py:  thermal_d_over_d = 8e-5,
-                        sigma_stability = 0.0147 deg (cross-check only).
+HANDS TO fits_copy.py:  sigma_heat = 0.0140 deg
+                        (its error, 0.0038 deg, is printed but not used).
 
 
 ================================================================================
@@ -840,10 +998,10 @@ gate_full = 1 s and gate_peaks = 10 s, from the .xry files (1.2).
 -------------------------------------
     tau, tau_err                  164.5 +/- 5.0 us       (4.1)
     zero_offset, zero_offset_err  0.0618 +/- 0.0060 deg  (4.2)
-    sigma_align_constant          0.0637 deg             (4.4)
-    sigma_repeat_pooled           0.0143 deg             (4.4)
-    thermal_d_over_d              8e-5                   (4.5)
-    sigma_stability               0.0147 deg             (4.5, printed only)
+    sigma_align                   0.0544 deg             (4.4)
+    sigma_heat                    0.0140 deg             (4.5)
+
+All four are printed at the top of the output.
 
 5.3  correct(scan, gate_time, tau, offset)
 ------------------------------------------
@@ -863,7 +1021,7 @@ CHOICES AND WHY
   - SELECT POINTS BY MEASURED ANGLE: every peak window and flank window in
     the code was read off a plot of the measured angle. The data sit on a
     0.1 deg grid. If the windows were applied to the shifted angles, a
-    0.062 deg shift (or the +/-0.064 deg alignment variants) could push an
+    0.062 deg shift (or the +/-0.054 deg alignment variants) could push an
     edge point in or out. With only 9 points in the n=1 peak, losing one
     changes the fit noticeably, and the variants would then measure the
     effect of losing a point rather than the effect of the angle shift.
@@ -877,35 +1035,43 @@ The method of 3.6, with these sources:
     source         moved                     by +/-       from
     dead time      tau                       5.0 us       deadtime.py
     zero offset    every angle               0.0060 deg   angle_offset.py
-    alignment      every angle               0.0637 deg   alignment_error.py
-    repeatability  every angle               0.0143 deg   alignment_error.py
+    alignment      every angle               0.0544 deg   alignment_error.py
+    heating        every angle               0.0140 deg   temperature_error.py
 
 That is 1 nominal + 4 x 2 = 9 complete runs of the analysis (dict
 "variants", built from dict "error_sources"). Every fit below is done for
-every variant. report() prints each result as
+every variant. error_budget() turns the variants into one error per source
+(half the up-down difference, 3.6) and the total in quadrature. report()
+uses it to print each result as
 
     value +/- total   (fit ..., dead time ..., zero offset ..., alignment ...,
-                       repeatability ..., [extra])
+                       heating ..., [extra])
 
 and returns the totals, which are the ones written on the figures. The
-figures themselves always show the nominal variant.
+figures themselves always show the nominal variant. Figure 6 also uses
+error_budget() directly: each panel has a "mu_1 error budget" box listing
+the K-alpha1 centre's fit, dead time, zero offset, alignment and heating
+errors and their total (5.9).
 
-Two errors are not variants and are passed to report() as "extra":
+One error is not a variant and is passed to report() as "extra":
     fit range   bremsstrahlung only (5.6)
-    thermal     wavelengths only (5.10)
+There is no separate thermal term on the wavelengths any more: the heating
+variant already moves every angle, which covers a change of d (4.5, 5.10).
 
 CHOICES AND WHY
-  - Alignment and repeatability are errors in WHERE THE ANGLE SCALE REALLY
-    IS, exactly like the zero offset. So they are applied the same way: by
+  - Alignment and heating are errors in WHERE THE ANGLE SCALE REALLY IS,
+    exactly like the zero offset. So they are applied the same way: by
     moving every angle. This reuses the existing machinery, and it
     automatically gives the right answer everywhere, including exactly
     zero for differences of angles (3.7).
-  - Repeatability is added in quadrature with the fit error. Strictly, the
-    repeatability scatter already contains some fit noise (from the noisy
-    1 s scans it was measured on). But the close-up scans used here have
-    fit errors of only 0.001-0.008 deg, so the double counting is tiny
-    (e.g. sqrt(0.0143^2 + 0.004^2) = 0.0148). Slightly conservative,
-    much simpler.
+  - NO repeatability source. sigma_heat comes from two same-day runs with
+    nothing touched, so it already holds the run-to-run scatter (4.5).
+    Adding repeatability as well would count it twice.
+  - Heating is added in quadrature with the fit error. Strictly, the
+    measured heating shift contains some noise of its own (its error is
+    0.0038 deg). But the close-up scans used here have fit errors of only
+    0.001-0.008 deg, so the double counting is small. Slightly
+    conservative, much simpler.
   - Applied as ONE shift to all scans at once, although each scan was a
     separate run. For any single result (one centre, U, one separation)
     this makes no difference. It would matter only for a result combining
@@ -987,9 +1153,9 @@ CHOICES AND WHY
     reasonable analyses and no way to say which is correct; the honest
     error is the full difference between them.
   - ABSOLUTE ERRORS ON THE PEAKS ARE NOT FOR U: angle errors matter most
-    here. The onset is at ~3.6 deg; a 0.064 deg shift there is 1.8% of the
-    angle, so 1.8% of lambda_min and of U (0.63 kV). The same angle error
-    at 55 deg is only 0.12% of the wavelength (2.7).
+    here. The onset is at ~3.6 deg; a 0.054 deg shift there is 1.5% of the
+    angle, so 1.5% of lambda_min and of U (0.54 kV). The same angle error
+    at 55 deg is only 0.07% of the wavelength (2.7).
 
 5.7  Checkmark 2: isolating each K-alpha peak - subtract_background()
 ---------------------------------------------------------------------
@@ -1044,9 +1210,9 @@ deg against 0.097 in the two-line fit). The large chi^2_nu at n=1 and n=3
 says one Gaussian is not the right shape - which is the point: it motivates
 the two-Gaussian fits.
 
-All angle errors (zero offset, alignment, repeatability) go straight onto
-every fitted centre; alignment (0.064 deg) is 10-60x the fit error. Dead
-time changes heights, not centres.
+All angle errors (zero offset, alignment, heating) go straight onto every
+fitted centre; alignment (0.054 deg) is 10-55x the fit error. Dead time
+changes heights, not centres.
 
 5.9  Two-Gaussian fits (Figures 5 and 6)
 ----------------------------------------
@@ -1089,6 +1255,17 @@ exactly two Gaussians, and n=1 has only 9 points), so errors are scaled up
 (3.4). Results are expanded back to six numbers [A1, mu1, sigma, 0.518 A1,
 mu2, sigma] so Figure 6 is drawn the same way as Figure 5.
 
+MU_1 ERROR BUDGET BOX ON FIGURE 6. Each panel lists every error on the
+K-alpha1 centre mu_1 (from error_budget(), 5.4), in deg:
+
+    order   fit     dead time  zero offset  alignment  heating  total
+    n=1     0.0039  0.0001     0.0060       0.0544     0.0140   0.0567
+    n=2     0.0079  0.0002     0.0060       0.0544     0.0140   0.0571
+    n=3     0.0041  0.0000     0.0060       0.0544     0.0140   0.0567
+
+    WHY show it: it makes plain on the figure itself that the alignment
+    error, not the fit, sets the error on every peak position.
+
 EXPECTED POSITIONS ON FIGURES 6 AND 7 (function mark_expected)
 Each panel also shows where Bragg's law says the two lines SHOULD be:
 
@@ -1119,8 +1296,8 @@ What the arrows show:
   - The offset is ~0.16 deg at n=1 and n=2 but only ~0.04 deg at n=3, so
     it is not one constant angle: a single extra zero offset cannot remove
     it.
-  - At n=3 both offsets are well inside the total angle error of +/-0.066
-    deg; at n=1 and n=2 they are ~2.5 times it (Part 7).
+  - At n=3 both offsets are well inside the total angle error of +/-0.057
+    deg; at n=1 and n=2 they are ~2.8-2.9 times it (Part 7).
 
 5.10 Results derived from the constrained fit
 ---------------------------------------------
@@ -1130,11 +1307,13 @@ constant angle shift cancels, so only fit and dead-time errors remain:
 this is the CLEANEST result of the experiment.
 
 K-ALPHA1 WAVELENGTH  lambda = 2 d sin(mu1) / n, against 154.06 pm. Errors:
-all variants, plus "thermal" = lambda x 8e-5 for the uncertainty in d.
+all variants. There is no separate term for the uncertainty in d: the
+heating variant (4.5) moves every angle and stands in for any change of d
+with temperature.
 
     WHY quote n=3: the angle error does 5x less damage there (2.7).
     WHY not average the three orders: they share the alignment and
-    repeatability errors, so their errors are correlated (3.7). A naive
+    heating errors, so their errors are correlated (3.7). A naive
     weighted mean would claim a much smaller error than is real.
 
 5.11 chi_squared.py - which peak model describes the data better?
@@ -1235,9 +1414,10 @@ not perfect. Each possible cause was tested, as follows.
             chi2_nu = 1.13
         So the counting errors are correct AND the peak shape is the same
         from run to run.
-      - The shift needed was 0.0136 +/- 0.0011 deg: the run-to-run
-        repeatability of 4.4 (0.0143 deg), confirmed by a completely
-        separate method.
+      - The shift needed was 0.0136 +/- 0.0011 deg: the same size as the
+        run-to-run shift that sigma_heat stands for (4.5, 0.0140 deg),
+        from a different pair of runs. (This is the same idea as the
+        overlay of 4.4: one scan as a scaled, shifted copy of another.)
 
   (2) THE DATA ARE VERY PRECISE. At 10 s per step the n=2 peak top is
       ~13,000 counts, so each point is known to < 1%. The fitted curves
@@ -1267,8 +1447,8 @@ not perfect. Each possible cause was tested, as follows.
   (4) RULED OUT:
       - ANGLE JITTER from step to step. Adding an angle error sigma_theta
         x (slope of the peak) to each error bar would need 35-600 mdeg to
-        reach chi2_nu = 1 (repeatability is only 14 mdeg), and it cannot
-        explain misfits on the flat tails, where the slope is ~0.
+        reach chi2_nu = 1 (run-to-run shifts are only 14 mdeg, 4.5), and
+        it cannot explain misfits on the flat tails, where the slope is ~0.
       - TUBE INTENSITY FLICKER. Adding a fraction f of the rate to each
         error bar would need f = 30-1400%.
       - DEAD TIME. n=2 has the same peak rate as n=1 (~1000/s raw) and
@@ -1431,7 +1611,7 @@ constant at ~0.087 deg."
   - The RESULTS barely move: mean 1 is 16.0131 / 33.2731 / 55.0711 deg
     with two Voigts against 16.0131 / 33.2759 / 55.0703 deg with two
     Gaussians, differences of at most 0.003 deg against a total error of
-    0.066 deg. The Gaussian results can be quoted with confidence; the
+    0.057 deg. The Gaussian results can be quoted with confidence; the
     Voigt fit shows the line shape is not what limits them.
 
 5.13 Pseudo-Voigt line shape (Figure 8)
@@ -1504,19 +1684,22 @@ PART 6 - THE ERROR BUDGET IN ONE PLACE
   dead time      tau +/- 5 us  current scan (4.1)            variants
   zero offset    0.0060 deg    direct beam, incl. shape      variants
                                error (4.2)                   (angle shift)
-  alignment      0.0637 deg    half the roll-flip shift      variants
-                               (4.4)                         (angle shift)
-  repeatability  0.0143 deg    pooled repeat scans (4.4)     variants
-                                                             (angle shift)
+  alignment      0.0544 deg    half the K-alpha n=1 shift    variants
+                               when the crystal is turned    (angle shift)
+                               180 deg about the beam axis
+                               (overlay, 4.4)
+  heating        0.0140 deg    the whole K-alpha n=1 shift   variants
+                               heated vs unheated; also      (angle shift)
+                               run-to-run stability
+                               (overlay, 4.5)
   fit range      full diff.    bremsstrahlung below 10 deg   U, lambda_min
                                vs full range (5.6)
-  thermal        8e-5 of d     alpha x sigma_T (4.5)         wavelengths
 
 What dominates which result:
 
-    U and lambda_min          alignment (0.63 kV) and fit range (0.60 kV)
-    peak centres              alignment (0.064 deg)
-    K-alpha1 wavelength       alignment (0.60 / 0.26 / 0.12 pm at n=1/2/3)
+    U and lambda_min          fit range (0.60 kV) and alignment (0.54 kV)
+    peak centres              alignment (0.054 deg)
+    K-alpha1 wavelength       alignment (0.52 / 0.22 / 0.10 pm at n=1/2/3)
     doublet separation        fit error only (angle errors cancel)
     peak heights              fit error, then dead time
 
@@ -1524,9 +1707,17 @@ Deliberately NOT counted, and why:
 
   - The 0.1 deg STEP SIZE. A fitted centre is not stuck on the grid (the
     fit interpolates between points), and any wobble in where the
-    goniometer actually stops is already part of the repeatability.
-  - The heated-unheated ANGLE STABILITY (0.0147 deg). Same effect as the
-    repeatability, same size: counting both would be double counting.
+    goniometer actually stops is already part of the run-to-run shift
+    that the heating error covers (4.5).
+  - A separate REPEATABILITY error. The heating shift comes from two
+    same-day runs with nothing touched, so it already holds the run-to-run
+    scatter: counting both would be double counting (4.5).
+  - A separate THERMAL error on d. The heating error moves every angle, and
+    so already stands in for a change of d with temperature (4.5, 5.10).
+  - A tilt of the crystal about the BEAM axis. Second order: < 0.003 deg at
+    n=1 for a 1 deg tilt (4.4).
+  - The K-beta n=1 cross-checks in 4.4 and 4.5. Printed and plotted, not
+    used.
   - The FIXED INTENSITY RATIO 0.518. Tested (5.9): negligible.
   - The DEAD-TIME MODEL choice (non-paralysable vs paralysable). Changes
     peak heights by ~6%, nothing else (4.1).
@@ -1540,27 +1731,29 @@ Errors are totals of everything in Part 6, in quadrature. Values before
 the dead-time and zero-offset corrections are in brackets.
 
 Bremsstrahlung (Checkmark 1)
-    lambda_min = 34.60 +/- 0.87 pm   (35.19)
-    U          = 35.83 +/- 0.89 kV   (35.24)
+    lambda_min = 34.60 +/- 0.81 pm   (35.19)
+    U          = 35.83 +/- 0.83 kV   (35.24)
     chi^2_nu = 1.84
     error budget on U: fit 0.13, dead time 0.00, zero offset 0.06,
-                       alignment 0.63, repeatability 0.14, fit range 0.60
-    Set on the tube: 35 kV. Agreement: 0.9 sigma.
+                       alignment 0.54, heating 0.14, fit range 0.60
+    Set on the tube: 35 kV. Agreement: 1.0 sigma.
 
 Single-Gaussian centres (doublet centroid)
-    n=1: 16.048 +/- 0.066 deg   (16.110)
-    n=2: 33.299 +/- 0.066 deg   (33.361)
-    n=3: 55.137 +/- 0.066 deg   (55.198)
+    n=1: 16.048 +/- 0.057 deg   (16.110)
+    n=2: 33.299 +/- 0.057 deg   (33.361)
+    n=3: 55.137 +/- 0.057 deg   (55.198)
 
 Constrained fit, K-alpha1 centre against Bragg's law
-    n=1: 16.013 +/- 0.066 deg   predicted 15.852   +0.16 deg
-    n=2: 33.276 +/- 0.066 deg   predicted 33.113   +0.16 deg
-    n=3: 55.070 +/- 0.066 deg   predicted 55.029   +0.04 deg
+    n=1: 16.013 +/- 0.057 deg   predicted 15.852   +0.16 deg
+    n=2: 33.276 +/- 0.057 deg   predicted 33.113   +0.16 deg
+    n=3: 55.070 +/- 0.057 deg   predicted 55.029   +0.04 deg
+    (mu_1 error budget: alignment 0.054, heating 0.014, zero offset 0.006,
+     fit 0.004-0.008 deg; Figure 6)
 
 K-alpha1 wavelength, lambda = 2 d sin(mu1) / n
-    n=1: 155.59 +/- 0.62 pm    2.5 sigma above 154.06
-    n=2: 154.73 +/- 0.27 pm    2.5 sigma above
-    n=3: 154.14 +/- 0.12 pm    0.6 sigma above      <- quote this one
+    n=1: 155.59 +/- 0.54 pm    2.9 sigma above 154.06
+    n=2: 154.73 +/- 0.23 pm    2.9 sigma above
+    n=3: 154.14 +/- 0.11 pm    0.7 sigma above      <- quote this one
 
 Doublet separation (K-alpha2 - K-alpha1), constrained fit
     n=1: 0.099 +/- 0.010 deg   predicted 0.040   unresolved, meaningless
@@ -1583,9 +1776,11 @@ Which peak model fits better (chi_squared.py, 5.11)
 Calibrations
     dead time    tau = 164.5 +/- 5.0 us
     zero offset  0.0618 +/- 0.0060 deg
-    alignment    0.0637 deg;  repeatability 0.0143 deg (stability 0.0147)
-    expansion between heated and unheated runs: none detected,
-    delta_d/d < 4.5e-4 (2 sigma)
+    alignment    sigma_align = 0.0544 +/- 0.0043 deg
+                 (K-alpha n=1 shift -0.1089 +/- 0.0087 deg, halved;
+                  K-beta cross-check 0.0652 deg)
+    heating      sigma_heat  = 0.0140 +/- 0.0038 deg
+                 (K-beta cross-check 0.0137 deg)
 
 HOW TO READ THESE
   - The voltage agrees with the 35 kV setting once the angle errors and
@@ -1596,7 +1791,7 @@ HOW TO READ THESE
     Bragg's law and the Cu K-alpha splitting at the 4% level and is immune
     to every angle-calibration problem.
   - The n=3 wavelength agrees with the reference. The n=1 and n=2 values
-    are 2.5 sigma high: the leftover angle offset (Part 9, item 1).
+    are 2.9 sigma high: the leftover angle offset (Part 9, item 1).
   - The peak fits have chi^2_nu of 3-22. That is the peak SHAPE (not
     exactly Gaussian), seen because the data are precise; the error bars
     were checked and are right (5.11).
@@ -1616,14 +1811,28 @@ One line per choice: what, why, what was rejected. Section in brackets.
                                            squashed top otherwise      (4.2)
   Centroid vs Gaussian as shape error      beam not Gaussian; centre
                                            depends on model            (4.2)
-  Pooled repeatability                     2-run std devs unreliable   (4.4)
-  Half the ROLL shift as alignment error   flip reverses tilt; yaw
-                                           too badly misaligned        (4.4)
+  Overlay, not Gaussian centre shifts      no peak shape assumed;
+                                           works on the doublet as it
+                                           is                          (4.4)
+  Overlay both ways round                  half the difference
+                                           measures shape bias         (4.4)
+  1st-order K-alpha peak for the shift     the line the main analysis
+                                           measures; K-beta only a
+                                           cross-check                 (4.4)
+  Alignment from one flip only             vertical-axis tilt is the
+                                           only first-order effect;
+                                           the turn reverses it        (4.4)
+  Half the flip shift as alignment error   shift = 2 eps; truth is
+                                           midway                      (4.4)
   Alignment as error, not correction       corrections pull Bragg and
                                            U in opposite directions    (4.4)
-  Fit shifts vs tan(theta), not per line   separates expansion from
-                                           angle drift                 (4.5)
-  Stability not added to repeatability     same effect: double count   (4.5)
+  Heating shift taken whole                nothing reversed, so no
+                                           midway point                (4.5)
+  Heating replaces repeatability           same-day runs, nothing
+                                           touched: both would double
+                                           count                       (4.5)
+  No separate thermal term on d            heating variant already
+                                           moves every angle           (5.10)
   Errors from RAW counts                   subtraction removes no
                                            noise                       (3.1)
   One-count floor                          avoid infinite weight       (3.1)
@@ -1639,7 +1848,9 @@ One line per choice: what, why, what was rejected. Section in brackets.
                                            to be right                 (5.6)
   Straight-line baseline on flanks only    simplest; can't eat peak    (5.7)
   Spline for display only                  fitting a spline invents
-                                           data                        (3.8)
+                                           data; the overlay's spline
+                                           is a model, chi2 on real
+                                           points only                 (3.8)
   Makima spline                            no ringing, max between pts (5.7)
   Gaussian peaks, not Voigt                natural width 20x smaller   (2.6)
   Shared width + fixed ratio               free fit unstable and
@@ -1667,8 +1878,8 @@ PART 9 - LIMITATIONS AND NEXT STEPS
 
 1. LEFTOVER ANGLE OFFSET. After removing the 0.062 deg zero offset, the
    K-alpha1 peaks still sit above Bragg's law by +0.16, +0.16, +0.04 deg
-   (n = 1, 2, 3). With the alignment error included these are 2.5, 2.5 and
-   0.6 sigma: no longer a gross disagreement, but n=1 and n=2 need
+   (n = 1, 2, 3). With the alignment error included these are 2.9, 2.9 and
+   0.7 sigma (Part 7): no longer a gross disagreement, but n=1 and n=2 need
    explaining. It is not a constant, so a single zero offset cannot be the
    whole story. Candidates:
      - the CRYSTAL's own zero, which the direct-beam scan cannot see (4.2);
@@ -1700,21 +1911,46 @@ PART 9 - LIMITATIONS AND NEXT STEPS
 6. n=1 DOUBLET UNRESOLVED (0.040 deg splitting, below the width). mu2 - mu1
    at n=1 is meaningless. Option: fix mu2 = mu1 + predicted split at n=1.
 
-7. ASSUMED NUMBERS: sigma_T = 2 K (4.5). Use the recorded lab
-   temperature if there is one.
+7. HEATING APPLIED AS AN ANGLE SHIFT AT EVERY ORDER. sigma_heat was
+   measured at n=1 only. If the whole shift were thermal expansion it
+   would be a fixed fraction of d, delta_d/d = cot(theta) x 0.0140 deg =
+   8.4e-4 (about 21 K of warming with alpha = 40e-6/K), and in angle it
+   would grow as tan(theta) (2.8). The heating error on the n=3 wavelength
+   would then be ~0.13 pm, not 0.03 pm. An earlier version fitted the
+   shifts of five lines and found no growth with tan(theta), which supports
+   the angle shift, but that fit is no longer in the code. Overlaying the
+   heated and unheated 2nd- and 3rd-order peaks (both are in the Tuesday
+   scans) would settle it.
 
 8. THE n=1 CLOSE-UP SCAN is only 1 deg wide (4 flank points). A wider scan
    would give a much better baseline.
 
-9. ALIGNMENT AT HIGH ANGLE is extrapolated: the flipped scans stop at
-   30 deg, so the 0.0637 deg is assumed to hold at 33 and 55 deg (justified
-   by b = 0 in 4.4, but not measured).
+9. ALIGNMENT AT OTHER ANGLES rests on physics, not on a measurement: the
+   turned scan stops at 30 deg, so sigma_align was measured at n=1 only.
+   The same 0.0544 deg is applied at 3.6, 33 and 55 deg because a tilt
+   about the vertical axis adds the same angle everywhere (4.4).
+
+10. K-ALPHA AND K-BETA GIVE DIFFERENT sigma_align. The turned crystal's
+    K-alpha doublet changes shape (broader, flatter top; chi^2_nu 27-42),
+    so the turn did more than just reverse the tilt (possibly a different
+    part of the crystal is now in the beam). K-beta gives 0.065 deg
+    against K-alpha's 0.054 deg (1.9 sigma apart). K-alpha is used because
+    it is the line being measured; K-beta would make every angle error
+    ~20% larger. Turning the crystal back and rescanning would show
+    whether the shape change is real.
+
+11. sigma_heat COMES FROM ONE PAIR OF RUNS, so it is itself uncertain by
+    ~27% (0.0038 / 0.0140 deg). It is small next to the alignment, so
+    this hardly matters: with sigma_heat 27% larger, the n=1 K-alpha1
+    centre error would go from 0.057 to 0.058 deg. A few repeat pairs
+    would pin it down.
 
 
 ================================================================================
 PART 10 - GLOSSARY
 ================================================================================
 
+  beam axis         horizontal line along the incoming X-ray beam
   bremsstrahlung    smooth X-ray continuum from electrons slowing down
   centroid          intensity-weighted mean position, model-free
   chi^2_nu          chi-squared per degree of freedom; ~1 means good fit
@@ -1724,18 +1960,28 @@ PART 10 - GLOSSARY
   dof               degrees of freedom = points - fitted parameters
   doublet           two lines very close together (K-alpha1, K-alpha2)
   Duane-Hunt law    lambda_min = hc/(eU), shortest bremsstrahlung wavelength
+  eps, psi          crystal tilt about the vertical axis (moves peaks) and
+                    about the beam axis (second order only) (4.4)
   FWHM              full width at half maximum = 2.355 sigma for a Gaussian
   gate time         counting time per angle step (1 s or 10 s here)
   goniometer        the turntable carrying crystal and detector
   Kramers' law      theoretical shape of the bremsstrahlung spectrum
   makima            modified Akima spline; smooth, no overshoot
+  method error      half the difference between overlaying both ways
+                    round; measures bias from a change of shape (4.4)
   mosaic spread     small misorientations of blocks inside a real crystal
   order (n)         which multiple of lambda satisfies Bragg's law
+  overlay           sliding one scan across another to find their shift,
+                    by minimising chi^2 (peak_overlay.py, 4.4)
   pcov              covariance matrix of fitted parameters
   Poisson noise     sqrt(N) scatter of a count N
   quadrature        sqrt(a^2 + b^2 + ...): how independent errors add
+  sigma_align       alignment error: half the turned-crystal shift (4.4)
+  sigma_heat        heating error: the whole heated-unheated shift; also
+                    covers run-to-run stability (4.5)
   systematic error  shared by every point; does not shrink with more data
   variant           a full rerun with one input moved by +/-1 sigma
+  vertical axis     the goniometer axis the crystal turns about
   zero offset       angle reading at the true zero of the angle scale
 
   Main variables in fits_copy.py
@@ -1747,5 +1993,6 @@ PART 10 - GLOSSARY
     gaussian_fits, two_gaussian_fits,
     ratio_fits [variant]             fits per order
     error_sources, variants          the systematic-error machinery (5.4)
+    error_budget()                   error per source and the total (5.4)
     report()                         prints value +/- total (breakdown)
     weighted_fit()                   curve_fit with the scaling rule (3.4)

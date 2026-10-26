@@ -2,6 +2,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
+from save_figure import save_figure
 from deadtime import tau, tau_err
 
 # Zero-angle offset of the goniometer from a direct-beam scan (Cu anode, no NaCl crystal).
@@ -94,7 +95,8 @@ if __name__ == "__main__":
         ax.grid(alpha=0.3)
     axes[0].set_title("Direct beam")
     axes[1].set_title("Direct beam, log scale")
-    fig.suptitle(f"Goniometer zero offset, Cu anode, no crystal: $\\beta_0$ = {zero_offset:+.3f} $\\pm$ "
+    fig.suptitle(f"Goniometer zero offset from the direct-beam scan (Cu anode, no crystal): $\\beta_0$ = {zero_offset:+.3f} $\\pm$ "
                  f"{zero_offset_err:.3f}$\\degree$")
     fig.tight_layout()
+    save_figure("calib_2_zero_offset", fig)
     plt.show()

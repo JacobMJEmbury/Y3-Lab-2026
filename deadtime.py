@@ -2,6 +2,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
+from save_figure import save_figure
 
 # Dead time of the GM tube from a tube-current scan (Cu anode, NaCl crystal, goniometer held at one angle).
 # The true photon rate is proportional to the emission current, N = k * I. A GM tube is blind for a time tau
@@ -77,6 +78,8 @@ if __name__ == "__main__":
     axes[1].set_title("Linearised non-paralysable model")
     axes[1].legend(fontsize=8)
     axes[1].grid(alpha=0.3)
-    fig.suptitle("GM tube dead time, Cu anode, NaCl crystal")
+    fig.suptitle("GM tube dead time from the tube-current scan (Cu anode, NaCl crystal): "
+                 "non-paralysable and paralysable fits")
     fig.tight_layout()
+    save_figure("calib_1_deadtime", fig)
     plt.show()

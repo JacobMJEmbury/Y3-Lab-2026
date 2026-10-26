@@ -3,18 +3,19 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from scipy.interpolate import Akima1DInterpolator
 from scipy.special import voigt_profile
+from save_figure import save_figure
 
 # Calibrations and systematic errors, each worked out in its own file (run that file to see its fits and plots):
 #   deadtime.py           tau, tau_err                 GM-tube dead time (tube-current scan)
 #   angle_offset.py       zero_offset, zero_offset_err goniometer zero (direct-beam scan)
-#   alignment_error.py    sigma_align_constant         crystal alignment (roll-flipped crystal), deg
-#                         sigma_repeat_pooled          run-to-run repeatability of a peak centre, deg
-#   temperature_error.py  thermal_d_over_d             fractional uncertainty of d from the lab temperature
-#                         sigma_stability              heated-unheated angle shift, a cross-check of sigma_repeat
+#   alignment_error.py    sigma_align                  crystal alignment: half the Kα n=1 shift when the crystal is
+#                                                      turned 180 deg about the beam axis, deg
+#   temperature_error.py  sigma_heat                   crystal heating: Kα n=1 shift between the unheated and heated
+#                                                      scans, deg (also covers run-to-run stability)
 from deadtime import tau, tau_err
 from angle_offset import zero_offset, zero_offset_err
-from alignment_error import sigma_align_constant, sigma_repeat_pooled
-from temperature_error import thermal_d_over_d, sigma_stability
+from alignment_error import sigma_align
+from temperature_error import sigma_heat
 
 # Load Cu X-ray spectrum off NaCl crystal (columns: Bragg angle in deg, count rate in 1/s)
 measured_full = np.loadtxt("Cu_NaCl_long_1.2KPeak.csv", delimiter=",", skiprows=1, unpack=True)
@@ -58,32 +59,26 @@ def correct(scan, gate_time, tau, offset):
 # independent scatter. Instead the whole analysis is repeated with each one shifted by -/+ 1 sigma (the others held
 # at their central values), as in angle_offset.py. Half the spread of a result is its systematic error, added in
 # quadrature to the statistical error from the nominal fit.
-# Alignment and repeatability are both errors on where the angle scale really is, so like the zero offset they are
+# Alignment and heating are both errors on where the angle scale really is, so like the zero offset they are
 # applied as a shift of every angle. A shift common to all angles cancels in a doublet separation.
-# Each source: (name printed by report, (tau, angle shift) at -1 sigma, at +1 sigma).
+# Each source: (name used in the error budget, (tau, angle shift) at -1 sigma, at +1 sigma).
 error_sources = {"tau": ("dead time", (tau - tau_err, zero_offset), (tau + tau_err, zero_offset)),
                  "offset": ("zero offset", (tau, zero_offset - zero_offset_err), (tau, zero_offset + zero_offset_err)),
-                 "align": ("alignment", (tau, zero_offset - sigma_align_constant),
-                           (tau, zero_offset + sigma_align_constant)),
-                 "repeat": ("repeatability", (tau, zero_offset - sigma_repeat_pooled),
-                            (tau, zero_offset + sigma_repeat_pooled))}
+                 "align": ("alignment", (tau, zero_offset - sigma_align), (tau, zero_offset + sigma_align)),
+                 "heat": ("heating", (tau, zero_offset - sigma_heat), (tau, zero_offset + sigma_heat))}
 variants = {"nominal": (tau, zero_offset)}
 for key, (_, low, high) in error_sources.items():
     variants[f"{key} low"], variants[f"{key} high"] = low, high
 
 
-# Print fitted values with their error budget and return the total errors.
+# Error budget of fitted values: the total errors and each systematic error.
 # results maps each variant to an array of fitted values; stat holds their statistical errors from the nominal fit.
 # extra optionally maps the name of a further systematic error, not from the variants, to its array of errors.
-def report(names, results, stat, units, fmts, extra={}):
+def error_budget(results, stat, extra={}):
     sys = {name: np.abs(results[f"{key} high"] - results[f"{key} low"]) / 2
            for key, (name, _, _) in error_sources.items()}
     sys.update(extra)
-    total = np.sqrt(stat ** 2 + sum(errors ** 2 for errors in sys.values()))
-    for i, (name, value, unit, fmt) in enumerate(zip(names, results["nominal"], units, fmts)):
-        budget = ", ".join([f"fit {stat[i]:{fmt}}"] + [f"{source} {errors[i]:{fmt}}" for source, errors in sys.items()])
-        print(f"    {name:10s} = {value:{fmt}} +/- {total[i]:{fmt}} {unit:3s}  ({budget})")
-    return total
+    return np.sqrt(stat ** 2 + sum(errors ** 2 for errors in sys.values())), sys
 
 
 # curve_fit with the Poisson error bars taken as absolute (the gate times are known). If chi2/dof > 1 the model
@@ -102,14 +97,10 @@ scans = {variant: {"full": correct(measured_full, gate_full, *shift),
          for variant, shift in variants.items()}
 _, angle, rate, sigma = scans["nominal"]["full"]
 
-print(f"Corrections: dead time tau = {tau * 1e6:.1f} +/- {tau_err * 1e6:.1f} us, "
-      f"zero offset = {zero_offset:+.4f} +/- {zero_offset_err:.4f} deg")
-print(f"Angle errors: alignment +/- {sigma_align_constant:.4f} deg, repeatability +/- {sigma_repeat_pooled:.4f} deg "
-      f"(cross-check: heated-unheated stability {sigma_stability:.4f} deg, not counted again); "
-      f"thermal sigma_d/d = {thermal_d_over_d:.1e}")
-for label, (_, measured_rate) in zip(["Full scan"] + order_labels, [measured_full, measured_n1, measured_n2, measured_n3]):
-    print(f"    {label:9s}: highest rate {measured_rate.max():6.0f} 1/s, "
-          f"dead-time correction there x{1 / (1 - measured_rate.max() * tau):.3f}")
+# Highest measured rate of each scan and the dead-time correction factor there
+highest_rates = {label: measured_rate.max() for label, (_, measured_rate)
+                 in zip(["Full scan"] + order_labels, [measured_full, measured_n1, measured_n2, measured_n3])}
+deadtime_factors = {label: 1 / (1 - highest_rate * tau) for label, highest_rate in highest_rates.items()}
 
 
 # Remove the vertical offset of each dedicated scan relative to the full scan, for Figure 1 only.
@@ -128,7 +119,6 @@ def remove_offset(scan, peak_low, peak_high):
 rate_n1, offset_n1 = remove_offset(scans["nominal"]["n1"], 15.8, 16.4)
 rate_n2, offset_n2 = remove_offset(scans["nominal"]["n2"], 33.0, 33.7)
 rate_n3, offset_n3 = remove_offset(scans["nominal"]["n3"], 54.8, 55.5)
-print(f"Offset removed: 1st order {offset_n1:.2f} 1/s, 2nd order {offset_n2:.2f} 1/s, 3rd order {offset_n3:.2f} 1/s")
 
 plt.figure(figsize=(10, 5))
 plt.errorbar(angle, rate, yerr=sigma, linewidth=1, elinewidth=0.5, label="Full scan")
@@ -137,10 +127,12 @@ for key, label, shifted_rate in zip(peak_keys, order_labels, [rate_n1, rate_n2, 
     plt.errorbar(scan_angle, shifted_rate, yerr=scan_sigma, linewidth=1, elinewidth=0.5, label=f"{label} scan")
 plt.xlabel("Bragg angle, zero offset removed (deg)")
 plt.ylabel("Count rate, dead-time corrected (1/s)")
-plt.title("Cu anode, NaCl crystal")
+plt.title("Cu anode, NaCl crystal: full Bragg spectrum with the 1st, 2nd and 3rd order K-alpha scans\n"
+          "(dead-time and zero-offset corrected)")
 plt.legend()
 plt.grid(alpha=0.3)
 plt.tight_layout()
+save_figure("fits_1_full_spectrum")
 plt.show()
 
 # Checkmark 1
@@ -186,8 +178,7 @@ def fit_background(scan, angle_max=np.inf):
 background_fits = {variant: fit_background(scans[variant]["full"]) for variant in variants}
 popt, perr, chi2_nu = background_fits["nominal"]
 A, lambda_min, B = popt
-_, angle_bg, rate_bg, sigma_bg = (x[background] for x in scans["nominal"]["full"])
-dof = len(rate_bg) - len(popt)
+dof = np.count_nonzero(background) - len(popt)
 
 # Fit-range check: the same fit to the background below 10 deg only, near the onset, where the simplifications of
 # the model (the empirical absorption term, and no 2nd-order bremsstrahlung, which starts at ~7 deg) matter least.
@@ -198,33 +189,14 @@ popt_range = fit_background(scans["nominal"]["full"], range_max)[0]
 # Duane-Hunt law: lambda_min = hc / (eU)  ->  U [kV] = 1239.84 / lambda_min [pm]
 voltage = 1239.84 / lambda_min
 voltage_stat = voltage * perr[1] / lambda_min
+voltage_range = 1239.84 / popt_range[1]
 
-print("Bremsstrahlung fit:")
-A_err, lambda_min_err, B_err, voltage_err = report(
-    ["A", "lambda_min", "B", "U"],
+# Error budget of [A, lambda_min, B, U]: (total errors, each systematic error)
+background_budget = error_budget(
     {variant: np.append(fit[0], 1239.84 / fit[0][1]) for variant, fit in background_fits.items()},
-    np.append(perr, voltage_stat), ["", "pm", "", "kV"], [".4g", ".2f", ".3f", ".2f"],
-    {"fit range": np.abs(np.append(popt_range, 1239.84 / popt_range[1]) - np.append(popt, voltage))})
-print(f"    chi2/dof   = {chi2_nu:.2f} ({dof} dof), so the fit errors are scaled up by {np.sqrt(max(chi2_nu, 1)):.2f}")
-print(f"    fit below {range_max} deg only: lambda_min = {popt_range[1]:.2f} pm, U = {1239.84 / popt_range[1]:.2f} kV")
-print(f"    thermal error on d adds {voltage * thermal_d_over_d:.3f} kV to U (negligible, not included)")
-
-angle_fine = np.linspace(angle_bg.min(), angle_bg.max(), 2000)
-wavelength_fine = 2 * d_NaCl * np.sin(np.radians(angle_fine))
-
-plt.figure(figsize=(10, 5))
-plt.errorbar(angle_bg, rate_bg, yerr=sigma_bg, fmt=".", markersize=3, elinewidth=0.5,
-             label="Background data (peaks removed)")
-plt.plot(angle_fine, kramers(wavelength_fine, *popt), "r-", linewidth=1.5,
-         label=f"Kramers fit, $\\lambda_{{min}}$ = {lambda_min:.2f} $\\pm$ {lambda_min_err:.2f} pm, "
-               f"U = {voltage:.2f} $\\pm$ {voltage_err:.2f} kV ($\\chi^2_\\nu$ = {chi2_nu:.2f})")
-plt.xlabel("Bragg angle, zero offset removed (deg)")
-plt.ylabel("Count rate, dead-time corrected (1/s)")
-plt.title("Cu anode, NaCl crystal: bremsstrahlung fit")
-plt.legend()
-plt.grid(alpha=0.3)
-plt.tight_layout()
-plt.show()
+    np.append(perr, voltage_stat),
+    {"fit range": np.abs(np.append(popt_range, voltage_range) - np.append(popt, voltage))})
+A_err, lambda_min_err, B_err, voltage_err = background_budget[0]
 
 # Checkmark 2
 # Isolate the 1st, 2nd and 3rd order K-alpha peaks on a flat, zero baseline:
@@ -259,7 +231,6 @@ peaks = {variant: [subtract_background(scans[variant][key], background_fits[vari
                    for key in peak_keys]
          for variant in variants}
 slope_n1, slope_n2, slope_n3 = [peak[3] for peak in peaks["nominal"]]
-print(f"Base tilt removed (1/s per deg): 1st order {slope_n1:.2f}, 2nd order {slope_n2:.2f}, 3rd order {slope_n3:.2f}")
 
 # Smooth curve through each peak: modified Akima (makima) spline.
 # It passes through every data point but, unlike a cubic spline, does not overshoot/ring
@@ -268,24 +239,8 @@ print(f"Base tilt removed (1/s per deg): 1st order {slope_n1:.2f}, 2nd order {sl
 splines = [Akima1DInterpolator(peak_angle, peak_rate, method="makima")
            for peak_angle, peak_rate, _, _ in peaks["nominal"]]
 
-fig, axes = plt.subplots(1, 3, figsize=(14, 5))
-for ax, colour, label, (peak_angle, peak_rate, peak_sigma, _), spline in zip(
-        axes, colours, order_labels, peaks["nominal"], splines):
-    angle_smooth = np.linspace(peak_angle.min(), peak_angle.max(), 2000)
-    ax.errorbar(peak_angle, peak_rate, yerr=peak_sigma, fmt=".", color=colour, markersize=5, capsize=2, label="Data")
-    ax.plot(angle_smooth, spline(angle_smooth), color=colour, linewidth=1.5, label="Makima spline")
-    ax.axhline(0, color="k", linewidth=0.5)
-    ax.legend()
-    ax.set_title(f"{label} scan")
-    ax.set_xlabel("Bragg angle, zero offset removed (deg)")
-    ax.grid(alpha=0.3)
-axes[0].set_ylabel("Count rate, background subtracted (1/s)")
-fig.suptitle("Cu K-alpha peaks, dead-time corrected, bremsstrahlung and base tilt removed")
-fig.tight_layout()
-plt.show()
 
-
-# Copy 2 of the peak subplots: Gaussian fit to each peak
+# Gaussian fit to each peak
 def gaussian(x, amplitude, mean, sigma):
     return amplitude * np.exp(-(x - mean) ** 2 / (2 * sigma ** 2))
 
@@ -301,32 +256,10 @@ def fit_gaussian(peak):
 
 
 gaussian_fits = {variant: [fit_gaussian(peak) for peak in peaks[variant]] for variant in variants}
-gaussian_errors = []  # total errors on [amplitude, mean, sigma], one row per order
-for i, label in enumerate(order_labels):
-    print(f"{label} Gaussian (chi2/dof = {gaussian_fits['nominal'][i][2]:.2f}):")
-    gaussian_errors.append(report(["amplitude", "mean", "sigma"],
-                                  {variant: fits[i][0] for variant, fits in gaussian_fits.items()},
-                                  gaussian_fits["nominal"][i][1], ["1/s", "deg", "deg"], [".1f", ".4f", ".4f"]))
-
-fig, axes = plt.subplots(1, 3, figsize=(14, 5))
-for ax, colour, label, (peak_angle, peak_rate, peak_sigma, _), spline, (popt_g, _, _), err_g in zip(
-        axes, colours, order_labels, peaks["nominal"], splines, gaussian_fits["nominal"], gaussian_errors):
-    angle_smooth = np.linspace(peak_angle.min(), peak_angle.max(), 2000)
-    ax.errorbar(peak_angle, peak_rate, yerr=peak_sigma, fmt=".", color=colour, markersize=5, capsize=2, label="Data")
-    ax.plot(angle_smooth, spline(angle_smooth), color=colour, linewidth=1.5, label="Makima spline")
-    ax.plot(angle_smooth, gaussian(angle_smooth, *popt_g), "k--", linewidth=1.2,
-            label=f"Gaussian: $\\mu$ = {popt_g[1]:.4f} $\\pm$ {err_g[1]:.4f}$^\\circ$,\n"
-                  f"$\\sigma$ = {popt_g[2]:.4f} $\\pm$ {err_g[2]:.4f}$^\\circ$")
-    ax.axhline(0, color="k", linewidth=0.5)
-    ax.set_ylim(top=1.5 * peak_rate.max())  # headroom so the legend clears the peak
-    ax.legend(loc="upper left", fontsize=8)
-    ax.set_title(f"{label} scan")
-    ax.set_xlabel("Bragg angle, zero offset removed (deg)")
-    ax.grid(alpha=0.3)
-axes[0].set_ylabel("Count rate, background subtracted (1/s)")
-fig.suptitle("Cu K-alpha peaks, dead-time corrected, bremsstrahlung and base tilt removed")
-fig.tight_layout()
-plt.show()
+# Error budget of [amplitude, mean, sigma] for each order: (total errors, each systematic error)
+gaussian_budgets = [error_budget({variant: fits[i][0] for variant, fits in gaussian_fits.items()},
+                                 gaussian_fits["nominal"][i][1])
+                    for i in range(len(order_labels))]
 
 
 # Copy 3 of the peak subplots: sum of two Gaussians fitted to each peak
@@ -355,11 +288,6 @@ def fit_two_gaussians(n, peak, popt_g):
     return popt_2g, np.sqrt(np.diag(pcov_2g)), chi2_nu
 
 
-pair_names = ["A1", "mean 1", "sigma 1", "A2", "mean 2", "sigma 2"]
-pair_units = ["1/s", "deg", "deg"] * 2
-pair_fmts = [".1f", ".4f", ".4f"] * 2
-
-
 # Text box listing both Gaussians of a two-Gaussian fit with their total errors
 def pair_text(popt_2g, err_2g):
     return "\n".join(f"Gaussian {i // 3 + 1}:\n"
@@ -371,11 +299,11 @@ def pair_text(popt_2g, err_2g):
 two_gaussian_fits = {variant: [fit_two_gaussians(n, peak, popt_g)
                                for n, peak, (popt_g, _, _) in zip([1, 2, 3], peaks[variant], gaussian_fits[variant])]
                      for variant in variants}
-two_gaussian_errors = []
-for i, label in enumerate(order_labels):
-    print(f"{label} two-Gaussian fit (chi2/dof = {two_gaussian_fits['nominal'][i][2]:.2f}):")
-    two_gaussian_errors.append(report(pair_names, {variant: fits[i][0] for variant, fits in two_gaussian_fits.items()},
-                                      two_gaussian_fits["nominal"][i][1], pair_units, pair_fmts))
+# Error budget of [A1, mean 1, sigma 1, A2, mean 2, sigma 2] for each order: (total errors, each systematic error)
+two_gaussian_budgets = [error_budget({variant: fits[i][0] for variant, fits in two_gaussian_fits.items()},
+                                     two_gaussian_fits["nominal"][i][1])
+                        for i in range(len(order_labels))]
+two_gaussian_errors = [total for total, _ in two_gaussian_budgets]
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 6))
 for ax, colour, label, (peak_angle, peak_rate, peak_sigma, _), spline, (popt_2g, _, _), err_2g in zip(
@@ -396,8 +324,9 @@ for ax, colour, label, (peak_angle, peak_rate, peak_sigma, _), spline, (popt_2g,
     ax.set_xlabel("Bragg angle, zero offset removed (deg)")
     ax.grid(alpha=0.3)
 axes[0].set_ylabel("Count rate, background subtracted (1/s)")
-fig.suptitle("Cu K-alpha peaks, dead-time corrected: two-Gaussian fit to data")
+fig.suptitle("Cu K-alpha peaks, dead-time corrected: two-Gaussian fit (K-alpha1 + K-alpha2), all parameters free")
 fig.tight_layout()
+save_figure("fits_5_two_gaussians_free", fig)
 plt.show()
 
 # Copy 4 of the peak subplots: two-Gaussian fit to data with the intensity ratio fixed
@@ -455,16 +384,19 @@ def mark_expected(ax, n, means, heights):
                     arrowprops=dict(arrowstyle="->", color=colour, linewidth=1.2, mutation_scale=10))
 
 
-ratio_errors = []
-for i, label in enumerate(order_labels):
-    print(f"{label} two-Gaussian fit, I2/I1 = {amplitude_ratio}, shared sigma "
-          f"(chi2/dof = {ratio_fits['nominal'][i][3]:.2f}):")
-    ratio_errors.append(report(pair_names, {variant: fits[i][0] for variant, fits in ratio_fits.items()},
-                               ratio_fits["nominal"][i][1], pair_units, pair_fmts))
+ratio_budgets, mean_1_budgets = [], []
+for i in range(len(order_labels)):
+    mean_1_budgets.append(error_budget({variant: fits[i][0][[1]] for variant, fits in ratio_fits.items()},
+                                       ratio_fits["nominal"][i][1][[1]]))
+    ratio_budgets.append(error_budget({variant: fits[i][0] for variant, fits in ratio_fits.items()},
+                                      ratio_fits["nominal"][i][1]))
+ratio_errors = [total for total, _ in ratio_budgets]
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 6))
-for ax, n, colour, label, (peak_angle, peak_rate, peak_sigma, _), spline, (popt_2g, _, _, _), err_2g in zip(
-        axes, [1, 2, 3], colours, order_labels, peaks["nominal"], splines, ratio_fits["nominal"], ratio_errors):
+for ax, n, colour, label, (peak_angle, peak_rate, peak_sigma, _), spline, (popt_2g, perr_2g, _, _), err_2g, \
+        mean_1_budget in zip(axes, [1, 2, 3], colours, order_labels, peaks["nominal"], splines, ratio_fits["nominal"],
+                             ratio_errors, mean_1_budgets):
+    err_2g_stat = perr_2g[1]
     angle_smooth = np.linspace(peak_angle.min(), peak_angle.max(), 2000)
     ax.errorbar(peak_angle, peak_rate, yerr=peak_sigma, fmt=".", color=colour, markersize=5, capsize=2, label="Data")
     ax.plot(angle_smooth, spline(angle_smooth), color=colour, linewidth=1.5, label="Makima spline")
@@ -478,44 +410,56 @@ for ax, n, colour, label, (peak_angle, peak_rate, peak_sigma, _), spline, (popt_
     ax.text(0.98, 0.98, pair_text(popt_2g, err_2g),
             transform=ax.transAxes, ha="right", va="top", multialignment="left", fontsize=7,
             bbox=dict(boxstyle="round", facecolor="white", edgecolor="0.7"))
+    # Error budget of the K-alpha1 centre: the fit error and each systematic, in deg
+    total, sys = mean_1_budget
+    ax.text(0.98, 0.45, "\n".join([f"$\\mu_1$ error budget ($^\\circ$):", f"  fit  {err_2g_stat:.4f}"]
+                                   + [f"  {source}  {errors[0]:.4f}" for source, errors in sys.items()]
+                                   + [f"  total  {total[0]:.4f}"]),
+            transform=ax.transAxes, ha="right", va="top", multialignment="left", fontsize=7,
+            bbox=dict(boxstyle="round", facecolor="white", edgecolor="0.7"))
     ax.set_title(f"{label} scan")
     ax.set_xlabel("Bragg angle, zero offset removed (deg)")
     ax.grid(alpha=0.3)
 axes[0].set_ylabel("Count rate, background subtracted (1/s)")
-fig.suptitle(f"Cu K-alpha peaks, dead-time corrected: two-Gaussian fit, I2/I1 = {amplitude_ratio}, shared $\\sigma$")
+fig.suptitle(f"Cu K-alpha peaks, dead-time corrected: two-Gaussian fit (K-alpha1 + K-alpha2), "
+             f"I2/I1 fixed at {amplitude_ratio}, shared $\\sigma$")
 fig.tight_layout()
+save_figure("fits_6_two_gaussians_fixed_ratio", fig)
 plt.show()
 
 # Separation of the two summed Gaussians (K-alpha2 mean - K-alpha1 mean) in the ratio-constrained fit,
 # against the Bragg's-law prediction. A constant zero offset moves both means equally, so it cancels here.
-print("K-alpha doublet separation, ratio-constrained fit:")
+# One entry per order, in deg; each budget is (total error, each systematic error).
+separations, separation_budgets, predicted_separations = [], [], []
 for i, n in enumerate([1, 2, 3]):
     popt_2g, _, separation_err, _ = ratio_fits["nominal"][i]
-    report([f"n={n}"], {variant: np.array([fits[i][0][4] - fits[i][0][1]]) for variant, fits in ratio_fits.items()},
-           np.array([separation_err]), ["deg"], [".4f"])
-    print(f"               predicted {doublet_split(n, popt_2g[1]):.4f} deg")
+    separations.append(popt_2g[4] - popt_2g[1])
+    separation_budgets.append(error_budget({variant: np.array([fits[i][0][4] - fits[i][0][1]])
+                                            for variant, fits in ratio_fits.items()}, np.array([separation_err])))
+    predicted_separations.append(doublet_split(n, popt_2g[1]))
+separation_errors = [total[0] for total, _ in separation_budgets]
 
 
 # K-alpha1 wavelength from each order, lambda = 2 d sin(mean_1) / n, against the reference value 154.06 pm.
-# Every angle error moves it; in addition d is uncertain by thermal_d_over_d (lab temperature, temperature_error.py).
+# Every angle error moves it, the heating error included, which stands in for any change of d with temperature.
 def kalpha1_wavelength(n, mean_1):
     return 2 * d_NaCl * np.sin(np.radians(mean_1)) / n
 
 
-print("K-alpha1 wavelength from the ratio-constrained fit, lambda = 2 d sin(mean 1) / n:")
+# K-alpha1 wavelength from the ratio-constrained fit, one entry per order, in pm; each budget is (total error, each
+# systematic error). wavelength_pulls is (wavelength - 154.06 pm) in units of its total error.
+wavelengths, wavelength_budgets = [], []
 for i, n in enumerate([1, 2, 3]):
     popt_2g, perr_2g, _, _ = ratio_fits["nominal"][i]
-    wavelength = kalpha1_wavelength(n, popt_2g[1])
+    wavelengths.append(kalpha1_wavelength(n, popt_2g[1]))
     wavelength_stat = 2 * d_NaCl * np.cos(np.radians(popt_2g[1])) / n * np.radians(perr_2g[1])
-    wavelength_err = report([f"n={n}"], {variant: np.array([kalpha1_wavelength(n, fits[i][0][1])])
-                                         for variant, fits in ratio_fits.items()},
-                            np.array([wavelength_stat]), ["pm"], [".2f"],
-                            {"thermal": np.array([wavelength * thermal_d_over_d])})[0]
-    print(f"               reference 154.06 pm (Bragg angle {np.degrees(np.arcsin(n * 154.06 / (2 * d_NaCl))):.3f} "
-          f"deg): {(wavelength - 154.06) / wavelength_err:+.1f} sigma")
+    wavelength_budgets.append(error_budget({variant: np.array([kalpha1_wavelength(n, fits[i][0][1])])
+                                            for variant, fits in ratio_fits.items()}, np.array([wavelength_stat])))
+wavelength_errors = [total[0] for total, _ in wavelength_budgets]
+wavelength_pulls = [(wavelength - 154.06) / error for wavelength, error in zip(wavelengths, wavelength_errors)]
 
 
-# Copy 5 of the peak subplots: Voigt line shape, one Voigt and two Voigts
+# Voigt line shape, one Voigt and two Voigts
 # The Gaussian fits have chi2/dof well above 1 because the real peaks have slightly heavier tails than a Gaussian.
 # A Voigt profile is a Gaussian (width sigma: the instrument - slits, divergence, crystal mosaic) convolved with a
 # Lorentzian (half width gamma: the natural line shape and crystal effects), the standard line shape for X-ray
@@ -546,63 +490,36 @@ def fit_voigts(peak, popt_g, popt_2g):
 
 # chi^2 against the measured points and its dof, which also counts the 2 parameters of the flank baseline fitted to
 # the same points (as in chi_squared.py). If the model were right, chi2/dof would scatter about 1 by sqrt(2/dof).
-# tex=True writes chi and +/- as symbols for the figure.
-def chi2_text(name, model, params, peak, tex=False):
+# chi2_dof returns (chi2, dof); chi2_text writes them for the figure, with chi and +/- as symbols if tex=True.
+def chi2_dof(model, params, peak):
     peak_angle, peak_rate, peak_sigma, _ = peak
     chi2 = np.sum(((peak_rate - model(peak_angle, *params)) / peak_sigma) ** 2)
-    dof = len(peak_rate) - len(params) - 2
+    return chi2, len(peak_rate) - len(params) - 2
+
+
+def chi2_text(name, model, params, peak, tex=False):
+    chi2, dof = chi2_dof(model, params, peak)
     chi, pm = ("$\\chi^2$", "$\\pm$") if tex else ("chi2", "+/-")
     return f"{name}: {chi} = {chi2:.1f}/{dof} = {chi2 / dof:.2f} {pm} {np.sqrt(2 / dof):.2f}"
 
 
 voigt_fits = [fit_voigts(peak, popt_g, popt_2g) for peak, (popt_g, _, _), (popt_2g, _, _, _)
               in zip(peaks["nominal"], gaussian_fits["nominal"], ratio_fits["nominal"])]
-for label, peak, (popt_1, perr_1, popt_2, perr_2), (popt_g, _, _), (popt_2g, _, _, _) in zip(
-        order_labels, peaks["nominal"], voigt_fits, gaussian_fits["nominal"], ratio_fits["nominal"]):
-    print(f"{label} Voigt fits (nominal variant, fit errors only):")
-    print(f"    one Voigt:  mean = {popt_1[1]:.4f} +/- {perr_1[1]:.4f} deg, sigma = {popt_1[2]:.4f} deg, "
-          f"gamma = {popt_1[3]:.4f} deg")
-    print(f"    two Voigts: mean 1 = {popt_2[1]:.4f} +/- {perr_2[1]:.4f} deg, mean 2 = {popt_2[2]:.4f} +/- "
-          f"{perr_2[2]:.4f} deg, sigma = {popt_2[3]:.4f} deg, gamma = {popt_2[4]:.4f} deg")
-    for text in [chi2_text("one Voigt    ", voigt, popt_1, peak),
-                 chi2_text("two Voigts   ", two_voigts_fixed_ratio, popt_2, peak),
-                 chi2_text("one Gaussian ", gaussian, popt_g, peak),
-                 chi2_text("two Gaussians", two_gaussians_fixed_ratio, popt_2g[[0, 1, 4, 2]], peak)]:
-        print(f"    {text}")
-
-fig, axes = plt.subplots(1, 3, figsize=(15, 6))
-for ax, n, colour, label, peak, (popt_1, _, popt_2, _), (popt_g, _, _), (popt_2g, _, _, _) in zip(
-        axes, [1, 2, 3], colours, order_labels, peaks["nominal"], voigt_fits, gaussian_fits["nominal"],
-        ratio_fits["nominal"]):
-    peak_angle, peak_rate, peak_sigma, _ = peak
-    angle_smooth = np.linspace(peak_angle.min(), peak_angle.max(), 2000)
-    ax.errorbar(peak_angle, peak_rate, yerr=peak_sigma, fmt=".", color=colour, markersize=5, capsize=2, label="Data")
-    ax.plot(angle_smooth, voigt(angle_smooth, *popt_1), "-.", color="0.4", linewidth=1.2, label="One Voigt")
-    ax.plot(angle_smooth, voigt(angle_smooth, *popt_2[[0, 1, 3, 4]]), ":", color="tab:red", linewidth=1.2,
-            label="Voigt 1 (K-alpha1)")
-    ax.plot(angle_smooth, voigt(angle_smooth, amplitude_ratio * popt_2[0], *popt_2[[2, 3, 4]]), ":",
-            color="tab:purple", linewidth=1.2, label="Voigt 2 (K-alpha2)")
-    ax.plot(angle_smooth, two_voigts_fixed_ratio(angle_smooth, *popt_2), "k--", linewidth=1.2, label="Sum of Voigts")
-    mark_expected(ax, n, popt_2[[1, 2]], [popt_2[0], amplitude_ratio * popt_2[0]])
-    ax.axhline(0, color="k", linewidth=0.5)
-    ax.set_ylim(top=1.9 * peak_rate.max())  # headroom for the legend and annotation
-    ax.legend(loc="upper left", fontsize=7)  # smaller than the other figures so it clears the chi2 box
-    ax.text(0.98, 0.98, "\n".join([chi2_text("One Voigt", voigt, popt_1, peak, tex=True),
-                                   chi2_text("Two Voigts", two_voigts_fixed_ratio, popt_2, peak, tex=True),
-                                   "Gaussians, for comparison:",
-                                   chi2_text("  one", gaussian, popt_g, peak, tex=True),
-                                   chi2_text("  two", two_gaussians_fixed_ratio, popt_2g[[0, 1, 4, 2]], peak,
-                                             tex=True)]),
-            transform=ax.transAxes, ha="right", va="top", multialignment="left", fontsize=7,
-            bbox=dict(boxstyle="round", facecolor="white", edgecolor="0.7"))
-    ax.set_title(f"{label} scan")
-    ax.set_xlabel("Bragg angle, zero offset removed (deg)")
-    ax.grid(alpha=0.3)
-axes[0].set_ylabel("Count rate, background subtracted (1/s)")
-fig.suptitle(f"Cu K-alpha peaks, dead-time corrected: one Voigt and two Voigts (I2/I1 = {amplitude_ratio}, "
-             f"shared $\\sigma$ and $\\gamma$)")
-fig.tight_layout()
-plt.show()
+# (chi2, dof) of each line shape, one dict per order
+voigt_chi2 = [{"one Voigt": chi2_dof(voigt, popt_1, peak),
+               "two Voigts": chi2_dof(two_voigts_fixed_ratio, popt_2, peak),
+               "one Gaussian": chi2_dof(gaussian, popt_g, peak),
+               "two Gaussians": chi2_dof(two_gaussians_fixed_ratio, popt_2g[[0, 1, 4, 2]], peak)}
+              for peak, (popt_1, _, popt_2, _), (popt_g, _, _), (popt_2g, _, _, _)
+              in zip(peaks["nominal"], voigt_fits, gaussian_fits["nominal"], ratio_fits["nominal"])]
+# Reduced chi^2 of the two-line fits in the order they are plotted (all free, then I2/I1 fixed with a shared width),
+# with its expected scatter sqrt(2/dof)
+for label, peak, (popt_free, _, _), chi2s in zip(order_labels, peaks["nominal"], two_gaussian_fits["nominal"],
+                                                 voigt_chi2):
+    for name, (chi2, dof) in [("two Gaussians, all free", chi2_dof(two_gaussians, popt_free, peak)),
+                              ("two Gaussians, I2/I1 fixed", chi2s["two Gaussians"]),
+                              ("two Voigts, I2/I1 fixed", chi2s["two Voigts"])]:
+        print(f"{label}, {name}: chi2/dof = {chi2:.1f}/{dof} = {chi2 / dof:.2f} +/- {np.sqrt(2 / dof):.2f}")
 
 # Copy 6 of the peak subplots: pseudo-Voigt line shape, one pseudo-Voigt and two pseudo-Voigts
 # A pseudo-Voigt approximates the Voigt by a weighted sum, not a convolution, of a Gaussian and a Lorentzian of the
@@ -649,32 +566,28 @@ def fit_pseudo_voigts(peak, popt_1v, popt_2v):
 
 pseudo_voigt_fits = [fit_pseudo_voigts(peak, popt_1v, popt_2v)
                      for peak, (popt_1v, _, popt_2v, _) in zip(peaks["nominal"], voigt_fits)]
-for n, label, peak, (popt_1, perr_1, popt_2, perr_2, separation_err), (popt_1v, _, popt_2v, _) in zip(
-        [1, 2, 3], order_labels, peaks["nominal"], pseudo_voigt_fits, voigt_fits):
-    fwhm_1v, eta_1v = voigt_fwhm_eta(*popt_1v[2:])
-    fwhm_2v, eta_2v = voigt_fwhm_eta(*popt_2v[3:])
-    print(f"{label} pseudo-Voigt fits (nominal variant, fit errors only; Voigt equivalent in brackets):")
-    print(f"    one pseudo-Voigt:  mean = {popt_1[1]:.4f} +/- {perr_1[1]:.4f} deg ({popt_1v[1]:.4f}), "
-          f"fwhm = {popt_1[2]:.4f} deg ({fwhm_1v:.4f}), eta = {popt_1[3]:.3f} +/- {perr_1[3]:.3f} ({eta_1v:.3f})")
-    print(f"    two pseudo-Voigts: mean 1 = {popt_2[1]:.4f} +/- {perr_2[1]:.4f} deg ({popt_2v[1]:.4f}), "
-          f"mean 2 = {popt_2[2]:.4f} +/- {perr_2[2]:.4f} deg ({popt_2v[2]:.4f}),")
-    print(f"                       fwhm = {popt_2[3]:.4f} deg ({fwhm_2v:.4f}), "
-          f"eta = {popt_2[4]:.3f} +/- {perr_2[4]:.3f} ({eta_2v:.3f})")
-    for text in [chi2_text("one pseudo-Voigt ", pseudo_voigt, popt_1, peak),
-                 chi2_text("two pseudo-Voigts", two_pseudo_voigts_fixed_ratio, popt_2, peak),
-                 chi2_text("one Voigt        ", voigt, popt_1v, peak),
-                 chi2_text("two Voigts       ", two_voigts_fixed_ratio, popt_2v, peak)]:
-        print(f"    {text}")
-    # Change from the Voigt to the pseudo-Voigt, in units of the pseudo-Voigt fit error
+# Comparison of the pseudo-Voigt fits with the Voigt fits, one dict per order (nominal variant, fit errors only).
+# The *_shift_sigma values are the change from the Voigt to the pseudo-Voigt in units of the pseudo-Voigt fit error.
+pseudo_voigt_comparison = []
+for n, peak, (popt_1, perr_1, popt_2, perr_2, separation_err), (popt_1v, _, popt_2v, _) in zip(
+        [1, 2, 3], peaks["nominal"], pseudo_voigt_fits, voigt_fits):
     separation, separation_v = popt_2[2] - popt_2[1], popt_2v[2] - popt_2v[1]
     wavelength, wavelength_v = kalpha1_wavelength(n, popt_2[1]), kalpha1_wavelength(n, popt_2v[1])
     wavelength_stat = 2 * d_NaCl * np.cos(np.radians(popt_2[1])) / n * np.radians(perr_2[1])
-    print(f"    pseudo-Voigt - Voigt: mean 1 {popt_2[1] - popt_2v[1]:+.4f} deg "
-          f"({(popt_2[1] - popt_2v[1]) / perr_2[1]:+.2f} fit sigma), separation {separation:.4f} +/- "
-          f"{separation_err:.4f} deg vs {separation_v:.4f} ({(separation - separation_v) / separation_err:+.2f} fit sigma; "
-          f"predicted {doublet_split(n, popt_2[1]):.4f})")
-    print(f"                          K-alpha1 wavelength {wavelength:.2f} pm vs {wavelength_v:.2f} pm "
-          f"({(wavelength - wavelength_v) / wavelength_stat:+.2f} fit sigma)")
+    pseudo_voigt_comparison.append(dict(
+        voigt_fwhm_eta_one=voigt_fwhm_eta(*popt_1v[2:]),
+        voigt_fwhm_eta_two=voigt_fwhm_eta(*popt_2v[3:]),
+        chi2={"one pseudo-Voigt": chi2_dof(pseudo_voigt, popt_1, peak),
+              "two pseudo-Voigts": chi2_dof(two_pseudo_voigts_fixed_ratio, popt_2, peak),
+              "one Voigt": chi2_dof(voigt, popt_1v, peak),
+              "two Voigts": chi2_dof(two_voigts_fixed_ratio, popt_2v, peak)},
+        mean_1_shift=popt_2[1] - popt_2v[1],
+        mean_1_shift_sigma=(popt_2[1] - popt_2v[1]) / perr_2[1],
+        separation=separation, separation_err=separation_err, separation_voigt=separation_v,
+        separation_shift_sigma=(separation - separation_v) / separation_err,
+        predicted_separation=doublet_split(n, popt_2[1]),
+        wavelength=wavelength, wavelength_voigt=wavelength_v,
+        wavelength_shift_sigma=(wavelength - wavelength_v) / wavelength_stat))
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 6))
 for ax, n, colour, label, peak, (popt_1, _, popt_2, _, _), (popt_1v, _, popt_2v, _) in zip(
@@ -709,4 +622,5 @@ axes[0].set_ylabel("Count rate, background subtracted (1/s)")
 fig.suptitle(f"Cu K-alpha peaks, dead-time corrected: one and two pseudo-Voigts (I2/I1 = {amplitude_ratio}, "
              f"shared FWHM and $\\eta$)")
 fig.tight_layout()
+save_figure("fits_8_pseudo_voigt", fig)
 plt.show()

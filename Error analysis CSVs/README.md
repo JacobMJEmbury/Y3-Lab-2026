@@ -2,6 +2,12 @@
 
 Run `python3 build_error_csvs.py` in this folder to regenerate every file here from the `.xry` files.
 
+> **What the analysis uses now:** only the full-scan CSVs. `alignment_error.py` and `temperature_error.py` find each shift by overlaying the 1st-order Kα peak of two scans (`peak_overlay.py`):
+> - **Alignment:** `flipped_roll` (the crystal turned 180° about the beam axis) against `normal_thu_0.6mA`, giving σ_align = |shift| / 2.
+> - **Heating:** `heated` against `unheated`, giving σ_heat = |shift|.
+>
+> The peak tables (`*_peak_positions.csv`) and the yaw, repeatability and tan θ results described below are from the earlier Gaussian-centre analysis. They are kept for reference only. `flipped_yaw` was not a deliberate flip and is not used.
+
 All scans are at 35 kV with a 0.1° step. Each rate has a Poisson error column, `err = √(R·Δt)/Δt`, counting at least 1 count. Peak centres come from a Gaussian on a linear background fitted over a ±0.4° window. Each centre's error is scaled up by √χ²_red whenever χ²_red > 1.
 
 ## Files
