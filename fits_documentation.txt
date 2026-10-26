@@ -103,7 +103,7 @@ Scripts and how the numbers flow between them
                                            sigma_stability (check only)  |
                                                                          v
     the four spectrum CSVs  ------------------------------------>  fits_copy.py
-                                                                   (7 figures,
+                                                                   (8 figures,
                                                                     all results)
                                                                          |
                                                                          v
@@ -1089,6 +1089,39 @@ exactly two Gaussians, and n=1 has only 9 points), so errors are scaled up
 (3.4). Results are expanded back to six numbers [A1, mu1, sigma, 0.518 A1,
 mu2, sigma] so Figure 6 is drawn the same way as Figure 5.
 
+EXPECTED POSITIONS ON FIGURES 6 AND 7 (function mark_expected)
+Each panel also shows where Bragg's law says the two lines SHOULD be:
+
+  - DOTTED VERTICAL LINES at bragg_angle(n, lambda) = arcsin(n lambda/2d)
+    for K-alpha1 (154.06 pm, red) and K-alpha2 (154.44 pm, purple), the
+    same colours as the fitted lines they belong to.
+  - An ARROW from each expected angle to the top of the matching fitted
+    line, at that line's height. Its length is fitted - expected.
+  - The value of fitted - expected is in the legend, not on the arrow: at
+    n=2 and n=3 the arrows are only 0.04-0.16 deg long on a 3 deg axis,
+    too short to carry a readable label.
+
+    fitted - expected (deg)       K-alpha1        K-alpha2
+                                Gauss  Voigt    Gauss  Voigt
+    n=1                        +0.161 +0.161   +0.220 +0.220
+    n=2                        +0.163 +0.160   +0.138 +0.144
+    n=3                        +0.042 +0.042   +0.045 +0.044
+
+What the arrows show:
+  - Every fitted line sits ABOVE its expected angle. That is the leftover
+    angle offset of Part 9, item 1, seen directly.
+  - At n=2 and n=3 both lines of the doublet are off by about the SAME
+    amount (0.16 / 0.14 deg, 0.04 / 0.04 deg): the whole doublet is
+    shifted, while its spacing is right. This is why the separation
+    agrees with Bragg's law (5.10) while the absolute positions do not.
+  - At n=1 the two offsets differ (+0.16 / +0.22 deg) only because the
+    unresolved doublet's separation is not measured there (5.12).
+  - The offset is ~0.16 deg at n=1 and n=2 but only ~0.04 deg at n=3, so
+    it is not one constant angle: a single extra zero offset cannot remove
+    it.
+  - At n=3 both offsets are well inside the total angle error of +/-0.066
+    deg; at n=1 and n=2 they are ~2.5 times it (Part 7).
+
 5.10 Results derived from the constrained fit
 ---------------------------------------------
 DOUBLET SEPARATION  mu2 - mu1, with its fit error including the
@@ -1288,7 +1321,9 @@ go through weighted_fit (3.4). NOMINAL VARIANT ONLY: this is a check of the
 line shape, not a new result, so the quoted centres and wavelengths stay
 those of the Gaussian fits (5.8-5.10).
 
-FIGURE 7: data, one Voigt, the two Voigts and their sum, for each order.
+FIGURE 7: data, one Voigt, the two Voigts and their sum, for each order,
+with the expected Bragg angles and arrows as on Figure 6 (5.9). Its legend
+is one size smaller (7 pt) so it clears the chi2 box.
 The box on each panel gives chi2 = chi2/dof = chi2_nu +/- sqrt(2/dof) for
 both Voigt models, and for the two Gaussian models for comparison. dof =
 N - k - 2, as in chi_squared.py (5.11). The same numbers are printed.
@@ -1398,6 +1433,63 @@ constant at ~0.087 deg."
     Gaussians, differences of at most 0.003 deg against a total error of
     0.066 deg. The Gaussian results can be quoted with confidence; the
     Voigt fit shows the line shape is not what limits them.
+
+5.13 Pseudo-Voigt line shape (Figure 8)
+---------------------------------------
+A copy of 5.12 with the PSEUDO-VOIGT, the approximation to the Voigt used
+by most diffraction software: a weighted SUM (not a convolution) of a
+Gaussian and a Lorentzian of the same FWHM,
+
+    pseudo_voigt(x, amplitude, mean, fwhm, eta)
+        = amplitude * [eta * L + (1 - eta) * G],  both of unit height
+        eta = 0 pure Gaussian, eta = 1 pure Lorentzian
+    two_pseudo_voigts_fixed_ratio(x, A1, mean_1, mean_2, fwhm, eta)
+        same constraints as 5.12: I2/I1 = 0.518, shared fwhm AND eta
+
+It has one width, so it cannot split the broadening into instrument
+(sigma) and natural line (gamma) as the Voigt does. voigt_fwhm_eta(sigma,
+gamma) converts a Voigt into its FWHM and the eta of the best-matching
+pseudo-Voigt (Thompson, Cox and Hastings 1987); the Voigt fits of 5.12
+give the starting guesses and the comparison. NOMINAL VARIANT ONLY, as in
+5.12.
+
+FIGURE 8: as Figure 7 with pseudo-Voigts; the box adds the fitted eta and
+the Voigt chi2 for comparison. The printout gives each pseudo-Voigt
+result with the Voigt equivalent in brackets, and the change from Voigt
+to pseudo-Voigt in units of the pseudo-Voigt fit error.
+
+RESULTS (two lines, I2/I1 = 0.518)
+
+    order  chi2_nu: Voigt  pseudo-V   eta fitted     eta from Voigt
+    n=1    21.6 +/- 1.0    21.6       0.000 +/- 0.031  0.000
+    n=2     2.50 +/- 0.28   2.53      0.024 +/- 0.010  0.038
+    n=3     4.27 +/- 0.29   4.47      0.088 +/- 0.038  0.142
+
+    order  mean 1 shift   separation (deg)          delta_lambda (pm)
+           pV - Voigt     pseudo-V         Voigt    pseudo-V        Voigt
+    n=1    +0.0000        0.0986 +/- 0.0120 0.0986  0.933            0.933
+    n=2    +0.0004        0.0747 +/- 0.0162 0.0759  0.307 +/- 0.067  0.312
+    n=3    -0.0001        0.2045 +/- 0.0067 0.2039  0.384 +/- 0.013  0.383
+
+WHAT IT MEANS
+  - NO MEASUREMENT CHANGES. Every centre moves by <= 0.0004 deg (<= 0.07
+    fit sigma), every separation by <= 0.08 fit sigma, and the K-alpha1
+    wavelengths are identical to 0.01 pm. The line-shape model is not a
+    systematic error on any quoted result.
+  - n=1: both shapes collapse to a pure Gaussian (gamma = 0, eta = 0), so
+    the fits are the same fit. The n=1 separation is wrong (0.93 pm
+    against 0.38 pm) for both shapes alike: it is not a line-shape
+    problem but the unresolved doublet (5.12).
+  - n=2, n=3: the true Voigt fits slightly better (n=3: chi2 102.5 against
+    107.3 for the same dof), and the fitted eta comes out ~35% below the
+    eta implied by the Voigt. With one shared width the pseudo-Voigt
+    cannot reproduce the Voigt's tails exactly; the extra freedom of
+    separate sigma and gamma is worth a little chi2 at n=3.
+  - eta GROWS with order (0, 0.024, 0.088), the same trend as gamma in
+    5.12: the Lorentzian share rises as the natural width spreads out with
+    tan(theta). The pseudo-Voigt sees the trend but cannot say whether it
+    comes from the instrument or the line; the Voigt can, which is why the
+    Voigt stays the line-shape check of record.
 
 
 ================================================================================
@@ -1561,6 +1653,9 @@ One line per choice: what, why, what was rejected. Section in brackets.
   F-test for the second line               models are nested           (5.11)
   Voigt fits as a check, not the result    centres move <= 0.003 deg;
                                            Gaussian results stand      (5.12)
+  True Voigt over pseudo-Voigt             same results (<= 0.08 fit
+                                           sigma); sigma, gamma separate
+                                           instrument and natural width (5.13)
   Keep Poisson error bars despite          two independent scans agree
   chi2_nu >> 1                             at chi2_nu = 1.13; cause is
                                            peak shape                  (5.11)

@@ -435,6 +435,26 @@ def fit_fixed_ratio(n, peak, popt_g):
 ratio_fits = {variant: [fit_fixed_ratio(n, peak, popt_g)
                         for n, peak, (popt_g, _, _) in zip([1, 2, 3], peaks[variant], gaussian_fits[variant])]
               for variant in variants}
+kalpha_lines = [("K-alpha1", 154.06, "tab:red"), ("K-alpha2", 154.44, "tab:purple")]  # pm
+
+
+# Angle at which Bragg's law puts a line of this wavelength in order n
+def bragg_angle(n, wavelength):
+    return np.degrees(np.arcsin(n * wavelength / (2 * d_NaCl)))
+
+
+# Mark where K-alpha1 and K-alpha2 are EXPECTED from Bragg's law (dotted vertical lines) and join each expected angle
+# to the top of the matching fitted line (arrow). fitted - expected goes in the legend: at n=2 and n=3 the arrows are
+# too short to carry a readable label. means and heights are those of the fitted K-alpha1 and K-alpha2 lines.
+def mark_expected(ax, n, means, heights):
+    for (name, wavelength, colour), mean, height in zip(kalpha_lines, means, heights):
+        expected = bragg_angle(n, wavelength)
+        ax.axvline(expected, linestyle=":", color=colour, linewidth=1.5,
+                   label=f"Bragg's law, {name}: fit {mean - expected:+.3f}$^\\circ$")
+        ax.annotate("", xy=(mean, height), xytext=(expected, height),
+                    arrowprops=dict(arrowstyle="->", color=colour, linewidth=1.2, mutation_scale=10))
+
+
 ratio_errors = []
 for i, label in enumerate(order_labels):
     print(f"{label} two-Gaussian fit, I2/I1 = {amplitude_ratio}, shared sigma "
@@ -443,14 +463,15 @@ for i, label in enumerate(order_labels):
                                ratio_fits["nominal"][i][1], pair_units, pair_fmts))
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 6))
-for ax, colour, label, (peak_angle, peak_rate, peak_sigma, _), spline, (popt_2g, _, _, _), err_2g in zip(
-        axes, colours, order_labels, peaks["nominal"], splines, ratio_fits["nominal"], ratio_errors):
+for ax, n, colour, label, (peak_angle, peak_rate, peak_sigma, _), spline, (popt_2g, _, _, _), err_2g in zip(
+        axes, [1, 2, 3], colours, order_labels, peaks["nominal"], splines, ratio_fits["nominal"], ratio_errors):
     angle_smooth = np.linspace(peak_angle.min(), peak_angle.max(), 2000)
     ax.errorbar(peak_angle, peak_rate, yerr=peak_sigma, fmt=".", color=colour, markersize=5, capsize=2, label="Data")
     ax.plot(angle_smooth, spline(angle_smooth), color=colour, linewidth=1.5, label="Makima spline")
     ax.plot(angle_smooth, gaussian(angle_smooth, *popt_2g[:3]), ":", color="tab:red", linewidth=1.2, label="Gaussian 1 (K-alpha1)")
     ax.plot(angle_smooth, gaussian(angle_smooth, *popt_2g[3:]), ":", color="tab:purple", linewidth=1.2, label="Gaussian 2 (K-alpha2)")
     ax.plot(angle_smooth, two_gaussians(angle_smooth, *popt_2g), "k--", linewidth=1.2, label="Sum of Gaussians")
+    mark_expected(ax, n, popt_2g[[1, 4]], popt_2g[[0, 3]])
     ax.axhline(0, color="k", linewidth=0.5)
     ax.set_ylim(top=1.9 * peak_rate.max())  # headroom for the legend and annotation
     ax.legend(loc="upper left", fontsize=8)
@@ -550,8 +571,9 @@ for label, peak, (popt_1, perr_1, popt_2, perr_2), (popt_g, _, _), (popt_2g, _, 
         print(f"    {text}")
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 6))
-for ax, colour, label, peak, (popt_1, _, popt_2, _), (popt_g, _, _), (popt_2g, _, _, _) in zip(
-        axes, colours, order_labels, peaks["nominal"], voigt_fits, gaussian_fits["nominal"], ratio_fits["nominal"]):
+for ax, n, colour, label, peak, (popt_1, _, popt_2, _), (popt_g, _, _), (popt_2g, _, _, _) in zip(
+        axes, [1, 2, 3], colours, order_labels, peaks["nominal"], voigt_fits, gaussian_fits["nominal"],
+        ratio_fits["nominal"]):
     peak_angle, peak_rate, peak_sigma, _ = peak
     angle_smooth = np.linspace(peak_angle.min(), peak_angle.max(), 2000)
     ax.errorbar(peak_angle, peak_rate, yerr=peak_sigma, fmt=".", color=colour, markersize=5, capsize=2, label="Data")
@@ -561,9 +583,10 @@ for ax, colour, label, peak, (popt_1, _, popt_2, _), (popt_g, _, _), (popt_2g, _
     ax.plot(angle_smooth, voigt(angle_smooth, amplitude_ratio * popt_2[0], *popt_2[[2, 3, 4]]), ":",
             color="tab:purple", linewidth=1.2, label="Voigt 2 (K-alpha2)")
     ax.plot(angle_smooth, two_voigts_fixed_ratio(angle_smooth, *popt_2), "k--", linewidth=1.2, label="Sum of Voigts")
+    mark_expected(ax, n, popt_2[[1, 2]], [popt_2[0], amplitude_ratio * popt_2[0]])
     ax.axhline(0, color="k", linewidth=0.5)
     ax.set_ylim(top=1.9 * peak_rate.max())  # headroom for the legend and annotation
-    ax.legend(loc="upper left", fontsize=8)
+    ax.legend(loc="upper left", fontsize=7)  # smaller than the other figures so it clears the chi2 box
     ax.text(0.98, 0.98, "\n".join([chi2_text("One Voigt", voigt, popt_1, peak, tex=True),
                                    chi2_text("Two Voigts", two_voigts_fixed_ratio, popt_2, peak, tex=True),
                                    "Gaussians, for comparison:",
@@ -578,5 +601,112 @@ for ax, colour, label, peak, (popt_1, _, popt_2, _), (popt_g, _, _), (popt_2g, _
 axes[0].set_ylabel("Count rate, background subtracted (1/s)")
 fig.suptitle(f"Cu K-alpha peaks, dead-time corrected: one Voigt and two Voigts (I2/I1 = {amplitude_ratio}, "
              f"shared $\\sigma$ and $\\gamma$)")
+fig.tight_layout()
+plt.show()
+
+# Copy 6 of the peak subplots: pseudo-Voigt line shape, one pseudo-Voigt and two pseudo-Voigts
+# A pseudo-Voigt approximates the Voigt by a weighted sum, not a convolution, of a Gaussian and a Lorentzian of the
+# same FWHM: eta = 0 is a pure Gaussian, eta = 1 a pure Lorentzian. It is within ~1% of a true Voigt but has a single
+# width, so unlike the Voigt it cannot split the broadening into instrument (sigma) and natural line (gamma).
+# The two-pseudo-Voigt fit has the same constraints as the two-Voigt one: I2/I1 = 0.518 and both lines share fwhm and
+# eta, so the height ratio is still the area ratio. Nominal variant only, as for the Voigts: this checks whether the
+# choice of line shape moves the fitted peak positions.
+def pseudo_voigt(x, amplitude, mean, fwhm, eta):
+    u = (x - mean) / fwhm
+    return amplitude * (eta / (1 + 4 * u ** 2) + (1 - eta) * np.exp(-4 * np.log(2) * u ** 2))
+
+
+def two_pseudo_voigts_fixed_ratio(x, amplitude_1, mean_1, mean_2, fwhm, eta):
+    return (pseudo_voigt(x, amplitude_1, mean_1, fwhm, eta)
+            + pseudo_voigt(x, amplitude_ratio * amplitude_1, mean_2, fwhm, eta))
+
+
+# FWHM of a Voigt from its sigma and gamma, and the eta of the pseudo-Voigt that best matches it
+# (Thompson, Cox and Hastings 1987). Used as starting guesses and to compare the fitted eta with the Voigt fits.
+def voigt_fwhm_eta(sigma, gamma):
+    f_g, f_l = 2 * np.sqrt(2 * np.log(2)) * sigma, 2 * gamma
+    fwhm = (f_g ** 5 + 2.69269 * f_g ** 4 * f_l + 2.42843 * f_g ** 3 * f_l ** 2 + 4.47163 * f_g ** 2 * f_l ** 3
+            + 0.07842 * f_g * f_l ** 4 + f_l ** 5) ** (1 / 5)
+    ratio = f_l / fwhm
+    return fwhm, 1.36603 * ratio - 0.47719 * ratio ** 2 + 0.11116 * ratio ** 3
+
+
+# Starting guesses from the Voigt fits. Returns the parameters and fit errors of the single pseudo-Voigt
+# [amplitude, mean, fwhm, eta] and of the two pseudo-Voigts [A1, mean_1, mean_2, fwhm, eta], and the fit error on
+# the separation mean_2 - mean_1, which includes the correlation of the two means.
+def fit_pseudo_voigts(peak, popt_1v, popt_2v):
+    peak_angle, peak_rate, peak_sigma, _ = peak
+    popt_1, pcov_1, _ = weighted_fit(pseudo_voigt, peak_angle, peak_rate, peak_sigma,
+                                     p0=[popt_1v[0], popt_1v[1], *voigt_fwhm_eta(*popt_1v[2:])],
+                                     bounds=([0, peak_angle.min(), 1e-4, 0], [np.inf, peak_angle.max(), 2, 1]))
+    popt_2, pcov_2, _ = weighted_fit(two_pseudo_voigts_fixed_ratio, peak_angle, peak_rate, peak_sigma,
+                                     p0=[popt_2v[0], popt_2v[1], popt_2v[2], *voigt_fwhm_eta(*popt_2v[3:])],
+                                     bounds=([0, peak_angle.min(), peak_angle.min(), 1e-4, 0],
+                                             [np.inf, peak_angle.max(), peak_angle.max(), 2, 1]))
+    separation_err = np.sqrt(pcov_2[1, 1] + pcov_2[2, 2] - 2 * pcov_2[1, 2])
+    return popt_1, np.sqrt(np.diag(pcov_1)), popt_2, np.sqrt(np.diag(pcov_2)), separation_err
+
+
+pseudo_voigt_fits = [fit_pseudo_voigts(peak, popt_1v, popt_2v)
+                     for peak, (popt_1v, _, popt_2v, _) in zip(peaks["nominal"], voigt_fits)]
+for n, label, peak, (popt_1, perr_1, popt_2, perr_2, separation_err), (popt_1v, _, popt_2v, _) in zip(
+        [1, 2, 3], order_labels, peaks["nominal"], pseudo_voigt_fits, voigt_fits):
+    fwhm_1v, eta_1v = voigt_fwhm_eta(*popt_1v[2:])
+    fwhm_2v, eta_2v = voigt_fwhm_eta(*popt_2v[3:])
+    print(f"{label} pseudo-Voigt fits (nominal variant, fit errors only; Voigt equivalent in brackets):")
+    print(f"    one pseudo-Voigt:  mean = {popt_1[1]:.4f} +/- {perr_1[1]:.4f} deg ({popt_1v[1]:.4f}), "
+          f"fwhm = {popt_1[2]:.4f} deg ({fwhm_1v:.4f}), eta = {popt_1[3]:.3f} +/- {perr_1[3]:.3f} ({eta_1v:.3f})")
+    print(f"    two pseudo-Voigts: mean 1 = {popt_2[1]:.4f} +/- {perr_2[1]:.4f} deg ({popt_2v[1]:.4f}), "
+          f"mean 2 = {popt_2[2]:.4f} +/- {perr_2[2]:.4f} deg ({popt_2v[2]:.4f}),")
+    print(f"                       fwhm = {popt_2[3]:.4f} deg ({fwhm_2v:.4f}), "
+          f"eta = {popt_2[4]:.3f} +/- {perr_2[4]:.3f} ({eta_2v:.3f})")
+    for text in [chi2_text("one pseudo-Voigt ", pseudo_voigt, popt_1, peak),
+                 chi2_text("two pseudo-Voigts", two_pseudo_voigts_fixed_ratio, popt_2, peak),
+                 chi2_text("one Voigt        ", voigt, popt_1v, peak),
+                 chi2_text("two Voigts       ", two_voigts_fixed_ratio, popt_2v, peak)]:
+        print(f"    {text}")
+    # Change from the Voigt to the pseudo-Voigt, in units of the pseudo-Voigt fit error
+    separation, separation_v = popt_2[2] - popt_2[1], popt_2v[2] - popt_2v[1]
+    wavelength, wavelength_v = kalpha1_wavelength(n, popt_2[1]), kalpha1_wavelength(n, popt_2v[1])
+    wavelength_stat = 2 * d_NaCl * np.cos(np.radians(popt_2[1])) / n * np.radians(perr_2[1])
+    print(f"    pseudo-Voigt - Voigt: mean 1 {popt_2[1] - popt_2v[1]:+.4f} deg "
+          f"({(popt_2[1] - popt_2v[1]) / perr_2[1]:+.2f} fit sigma), separation {separation:.4f} +/- "
+          f"{separation_err:.4f} deg vs {separation_v:.4f} ({(separation - separation_v) / separation_err:+.2f} fit sigma; "
+          f"predicted {doublet_split(n, popt_2[1]):.4f})")
+    print(f"                          K-alpha1 wavelength {wavelength:.2f} pm vs {wavelength_v:.2f} pm "
+          f"({(wavelength - wavelength_v) / wavelength_stat:+.2f} fit sigma)")
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 6))
+for ax, n, colour, label, peak, (popt_1, _, popt_2, _, _), (popt_1v, _, popt_2v, _) in zip(
+        axes, [1, 2, 3], colours, order_labels, peaks["nominal"], pseudo_voigt_fits, voigt_fits):
+    peak_angle, peak_rate, peak_sigma, _ = peak
+    angle_smooth = np.linspace(peak_angle.min(), peak_angle.max(), 2000)
+    ax.errorbar(peak_angle, peak_rate, yerr=peak_sigma, fmt=".", color=colour, markersize=5, capsize=2, label="Data")
+    ax.plot(angle_smooth, pseudo_voigt(angle_smooth, *popt_1), "-.", color="0.4", linewidth=1.2,
+            label="One pseudo-Voigt")
+    ax.plot(angle_smooth, pseudo_voigt(angle_smooth, *popt_2[[0, 1, 3, 4]]), ":", color="tab:red", linewidth=1.2,
+            label="Pseudo-Voigt 1 (K-alpha1)")
+    ax.plot(angle_smooth, pseudo_voigt(angle_smooth, amplitude_ratio * popt_2[0], *popt_2[[2, 3, 4]]), ":",
+            color="tab:purple", linewidth=1.2, label="Pseudo-Voigt 2 (K-alpha2)")
+    ax.plot(angle_smooth, two_pseudo_voigts_fixed_ratio(angle_smooth, *popt_2), "k--", linewidth=1.2,
+            label="Sum of pseudo-Voigts")
+    mark_expected(ax, n, popt_2[[1, 2]], [popt_2[0], amplitude_ratio * popt_2[0]])
+    ax.axhline(0, color="k", linewidth=0.5)
+    ax.set_ylim(top=1.9 * peak_rate.max())  # headroom for the legend and annotation
+    ax.legend(loc="upper left", fontsize=7)
+    ax.text(0.98, 0.98, "\n".join([chi2_text("One pV", pseudo_voigt, popt_1, peak, tex=True),
+                                   chi2_text("Two pV", two_pseudo_voigts_fixed_ratio, popt_2, peak, tex=True),
+                                   f"$\\eta$ = {popt_2[4]:.3f}",
+                                   "Voigts, for comparison:",
+                                   chi2_text("  one", voigt, popt_1v, peak, tex=True),
+                                   chi2_text("  two", two_voigts_fixed_ratio, popt_2v, peak, tex=True)]),
+            transform=ax.transAxes, ha="right", va="top", multialignment="left", fontsize=7,
+            bbox=dict(boxstyle="round", facecolor="white", edgecolor="0.7"))
+    ax.set_title(f"{label} scan")
+    ax.set_xlabel("Bragg angle, zero offset removed (deg)")
+    ax.grid(alpha=0.3)
+axes[0].set_ylabel("Count rate, background subtracted (1/s)")
+fig.suptitle(f"Cu K-alpha peaks, dead-time corrected: one and two pseudo-Voigts (I2/I1 = {amplitude_ratio}, "
+             f"shared FWHM and $\\eta$)")
 fig.tight_layout()
 plt.show()
