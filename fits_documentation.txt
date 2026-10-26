@@ -1,63 +1,209 @@
 ================================================================================
-  X-RAY SPECTRUM ANALYSIS (Cu anode, NaCl crystal) - DOCUMENTATION
-  Covers: fits_copy.py, the master version (fits.py is the original, unedited)
-          and the four error files it imports (see HOW TO RUN)
+  X-RAY SPECTRUM OF A COPPER ANODE, MEASURED WITH A NaCl CRYSTAL
+  Complete documentation: experiment, physics, statistics, code, decisions
   Last updated: 2026-10-26
 ================================================================================
 
+This file explains EVERYTHING in the analysis: what was measured, the
+physics behind it, the statistics the code relies on, what every script
+does, and - for every choice - why it was made and what the alternatives
+were. It is written so that someone who has never seen the code can follow
+it, and so that you can defend every step in a write-up or a viva.
 
-HOW TO READ THIS
-----------------
-Part 1 explains the physics and statistics the code relies on, from scratch.
-Part 2 walks through the code in the order it runs, saying what each block
-does and why. Part 3 lists the numbers it currently produces. Part 4 lists
-what is not yet handled. If you already know the physics, skip to Part 2.
+The master script is fits_copy.py. fits.py is the original, unedited
+version, kept for reference only.
 
 
-HOW TO RUN
-----------
+CONTENTS
+--------
+  QUICK START                       how to run it, what comes out
+  FILE MAP                          which file does what, how they connect
+
+  PART 1  THE EXPERIMENT            apparatus, what was measured, when
+  PART 2  THE PHYSICS               where X-rays come from, Bragg's law, ...
+  PART 3  THE STATISTICS TOOLKIT    Poisson errors, fitting, systematics
+  PART 4  THE CALIBRATION AND ERROR FILES
+            4.1 deadtime.py           GM-tube dead time
+            4.2 angle_offset.py       zero of the angle scale
+            4.3 build_error_csvs.py   peak tables for 4.4 and 4.5
+            4.4 alignment_error.py    crystal alignment, repeatability
+            4.5 temperature_error.py  thermal expansion, angle stability
+  PART 5  THE MAIN ANALYSIS, fits_copy.py, STAGE BY STAGE
+  PART 6  THE ERROR BUDGET IN ONE PLACE
+  PART 7  RESULTS
+  PART 8  DECISION LOG              every choice in one line, with why
+  PART 9  LIMITATIONS AND NEXT STEPS
+  PART 10 GLOSSARY
+
+
+================================================================================
+QUICK START
+================================================================================
+
     pip install -r requirements.txt
     python fits_copy.py
 
-The four CSV files must be in the same folder. Six figures open one at a
-time; close each window to move on to the next. Fit results are printed to
-the terminal as the script goes.
+Run it from this folder (the CSV files are read from the current folder).
+Seven figures open one at a time; close each window to get the next. All fit
+results, with their full error budgets, are printed to the terminal.
 
-Every calibration and systematic error is worked out in its own file and
-IMPORTED by fits_copy.py, so nothing has to be copied by hand. Redo a
-calibration (new CSV) and fits_copy.py picks it up on its next run.
+Each calibration file can also be run on its own to see its own output and
+figure:
 
-    file                  gives fits_copy.py                 from
-    deadtime.py           tau, tau_err                       tube-current scan
-    angle_offset.py       zero_offset, zero_offset_err       direct-beam scan
-    alignment_error.py    sigma_align_constant,              flipped-crystal scans
-                          sigma_repeat_pooled                repeat normal scans
-    temperature_error.py  thermal_d_over_d                   heated/unheated scans
-                          (sigma_stability, cross-check only)
+    python deadtime.py
+    python angle_offset.py
+    python alignment_error.py
+    python temperature_error.py
 
-Importing a file prints and plots nothing. Run one on its own
-(python alignment_error.py) to see its full output and figure.
-alignment_error.py and temperature_error.py read the peak tables in
-"Error analysis CSVs", which build_error_csvs.py makes from the .xry files.
+To compare how well the single Gaussian and the constrained two-Gaussian
+fit describe each peak (a table of reduced chi-squared with errors, see
+5.11):
+
+    python chi_squared.py
+
+The peak tables used by alignment_error.py and temperature_error.py are
+already in "Error analysis CSVs". To rebuild them from the raw .xry files
+(only needed if the raw data change), run build_error_csvs.py. It reads the
+.xry files from the folder ABOVE its own, using the Tuesday / Thursday /
+Friday folder layout, so its folder must sit inside the "Week 3" data
+folder (where it was made) for it to run.
 
 
 ================================================================================
-PART 1 - BASICS
+FILE MAP
 ================================================================================
 
-1.1  Where the X-rays come from
+Data files (this folder)
+    Cu_NaCl_long_1.2KPeak.csv     full spectrum, 2.5-62.3 deg
+    1st_order_long.csv            n=1 K-alpha peak, close up
+    2nd_Order_Good.csv            n=2 K-alpha peak, close up
+    3rd_Order_Long_Good.csv       n=3 K-alpha peak, close up (column 3)
+    current_characterisation.csv  count rate against tube current
+    Test_run_long_run4.csv        direct beam, no crystal
+
+Scripts and how the numbers flow between them
+
+    current_characterisation.csv
+            |
+        deadtime.py  ----------------------------- tau, tau_err ---------+
+            |                                                            |
+            v  (tau)                                                     |
+    Test_run_long_run4.csv                                               |
+            |                                                            |
+        angle_offset.py  ----------------- zero_offset, zero_offset_err -+
+                                                                         |
+    raw .xry files                                                       |
+            |                                                            |
+        build_error_csvs.py                                              |
+            |   alignment_peak_positions.csv                             |
+            +-----> alignment_error.py --- sigma_align_constant, --------+
+            |                              sigma_repeat_pooled           |
+            |   temperature_peak_positions.csv                           |
+            +-----> temperature_error.py - thermal_d_over_d, ------------+
+                                           sigma_stability (check only)  |
+                                                                         v
+    the four spectrum CSVs  ------------------------------------>  fits_copy.py
+                                                                   (7 figures,
+                                                                    all results)
+                                                                         |
+                                                                         v
+                                                                  chi_squared.py
+                                                                  (fit quality
+                                                                   table, 5.11)
+
+fits_copy.py IMPORTS its calibration numbers from the other files, so they
+are never copied by hand. Change a calibration and the next run of
+fits_copy.py uses it automatically. Importing a file prints and plots
+nothing: all printing and plotting in the calibration files sits under
+"if __name__ == '__main__':", which only runs when you run that file
+directly.
+
+    WHY imports rather than typed-in constants: a typed-in number goes stale
+    the moment a calibration is redone, and nobody notices. An import cannot
+    go stale.
+
+
+================================================================================
+PART 1 - THE EXPERIMENT
+================================================================================
+
+1.1  The apparatus
+------------------
+  - An X-RAY TUBE with a copper (Cu) anode. A hot tungsten filament emits
+    electrons; a high voltage U (35 kV here) accelerates them into the
+    anode, which emits X-rays. The tube current I (mA) sets how many
+    electrons arrive per second, and so how bright the X-rays are. It does
+    not change their wavelengths.
+  - A NaCl SINGLE CRYSTAL on a turntable (the goniometer). It reflects
+    X-rays only at angles where Bragg's law holds (2.4), so it works as a
+    wavelength filter.
+  - A GEIGER-MULLER (GM) TUBE on an arm that turns at twice the crystal
+    angle ("coupled" or "theta-2 theta" mode). It counts photons.
+  - Software that steps the angle (0.1 deg per step here), counts for a
+    fixed GATE TIME at each step, and stores the count RATE (counts per
+    second) in an .xry file.
+
+The angle the software reports is called beta in the raw files. In coupled
+mode it is the crystal angle theta.
+
+1.2  What was measured, and when
+--------------------------------
+All runs are at U = 35 kV and 0.1 deg per step. The current and gate time
+of each run are stored in its .xry file and were read from there.
+
+  Run (file)                       Day       I (mA)  gate   used for
+  -------------------------------  --------  ------  -----  -----------------
+  Cu_NaCl_long_1.2KPeak  (full)    Thursday  0.12    1 s    main spectrum
+  1st_order_long         (n=1)     Thursday  0.12    10 s   n=1 peak
+  2nd_Order_Good         (n=2)     Friday    1.0     10 s   n=2 peak
+  3rd_Order_Long_Good    (n=3)     Friday    1.0     10 s   n=3 peak
+  current scan                     -         0-1     10 s   dead time
+  Test_run_long, column 4          Friday    0.1     10 s   zero offset
+  normal / flipped crystal scans   Thu, Fri  various 1-10 s alignment
+  unheated / heated full scans     Tuesday   1.0     1 s    temperature
+
+History that matters:
+  - TUESDAY's runs were taken BEFORE the angle scale was fixed. Their peaks
+    sit about 0.12 deg higher than Thursday's. They are only ever used as
+    heated-minus-unheated DIFFERENCES, never as absolute angles.
+  - THURSDAY's runs were taken after the angle fix ("Angle_fixed" folder).
+    Some Thursday runs named "Na_Cl_Cu_distance_*" were taken before the
+    angle was set correctly and are not used (see the README in
+    "Error analysis CSVs").
+  - FRIDAY's normal-orientation scans agree with Thursday's to within
+    0.003-0.007 deg, so the setup did not change overnight. That is what
+    allows Thursday and Friday data to be combined.
+
+    WHY this matters: the n=2 and n=3 close-up scans are Friday data, while
+    the full scan and the n=1 scan are Thursday data. Without the
+    Thursday-Friday agreement check you could not put them on one angle
+    scale.
+
+1.3  The two "checkmarks"
+-------------------------
+  Checkmark 1: fit the smooth bremsstrahlung background and find where it
+               starts (lambda_min). That gives the tube voltage U.
+  Checkmark 2: isolate the K-alpha peak in orders n = 1, 2, 3 and fit it,
+               to find its position (so its wavelength) and to resolve the
+               K-alpha1 / K-alpha2 doublet.
+
+
+================================================================================
+PART 2 - THE PHYSICS
+================================================================================
+
+2.1  Where the X-rays come from
 -------------------------------
-Electrons are accelerated through a voltage U (about 35 kV here) and hit a
-copper anode. Two kinds of X-ray come out:
+Two processes in the anode make X-rays:
 
   (a) BREMSSTRAHLUNG ("braking radiation"). An electron is deflected and
       slowed by a nucleus and radiates a photon. It can lose any amount of
-      energy, so this gives a smooth, CONTINUOUS spectrum: the broad hump
-      that the peaks sit on.
+      energy, from almost nothing up to all of it, so this gives a smooth,
+      CONTINUOUS spectrum. It is the broad hump the peaks sit on.
 
   (b) CHARACTERISTIC LINES. An electron knocks a copper atom's innermost
       (K-shell, 1s) electron out. An outer electron drops into the hole and
-      emits a photon of one exact energy, fixed by copper's energy levels:
+      emits a photon whose energy is fixed by copper's energy levels:
 
           L -> K   gives K-alpha   (the strongest line)
           M -> K   gives K-beta    (weaker, shorter wavelength)
@@ -66,559 +212,1445 @@ copper anode. Two kinds of X-ray come out:
 
           K-alpha1 : 2p(3/2) -> 1s   lambda = 154.06 pm
           K-alpha2 : 2p(1/2) -> 1s   lambda = 154.44 pm
-          K-beta   :                 lambda = 139.22 pm
+          K-beta                     lambda = 139.22 pm
 
       The 2p(3/2) level has 4 quantum states and 2p(1/2) has 2, so
       K-alpha1 is about twice as intense: I(K-alpha2)/I(K-alpha1) ~ 0.5.
-      (The code uses 0.518.)
+      The code uses 0.518, slightly above the simple 1/2 (see 5.9 for why
+      the exact value hardly matters).
 
-1.2  The shortest wavelength: Duane-Hunt law
+  Other lines seen: the filament is tungsten (W). Tungsten slowly
+  evaporates onto the anode, so the spectrum also shows weak W L-lines. The
+  two small "unidentified" peaks match them once the same ~0.24 deg angle
+  offset as the Cu lines is allowed for:
+
+          W L-alpha1  147.6 pm  Bragg 15.17 deg  seen at ~15.43 deg
+          W L-beta1   128.2 pm  Bragg 13.14 deg  seen at ~13.41 deg
+
+  (Cu K-beta: Bragg 14.29 deg, seen at 14.53 deg, the same ~0.24 deg
+  offset.) These IDs are "most likely", not proven; they are not used in
+  any result, only masked or cropped out.
+
+2.2  The shortest wavelength: Duane-Hunt law
 --------------------------------------------
-An electron cannot give a photon more energy than it has, eU. The maximum
-photon energy therefore sets a MINIMUM wavelength:
+An electron arrives with kinetic energy eU and cannot give a photon more
+than that. The most energetic photon therefore has the SHORTEST wavelength:
 
     lambda_min = h c / (e U)
 
-With hc = 1239.84 keV pm this becomes
+With hc = 1239.84 keV pm:
 
     U [kV] = 1239.84 / lambda_min [pm]
 
-So measuring where the bremsstrahlung starts (lambda_min) measures the tube
-voltage.
+At 35 kV, lambda_min = 35.42 pm. Measuring where the bremsstrahlung starts
+measures the tube voltage. This is Checkmark 1.
 
-1.3  Turning angle into wavelength: Bragg's law
+2.3  The shape of the bremsstrahlung: Kramers' law
+--------------------------------------------------
+Kramers' law gives the number of photons per unit wavelength:
+
+    N(lambda)  proportional to  (lambda/lambda_min - 1) / lambda^2
+
+It is zero at lambda_min, rises steeply, peaks, then falls slowly.
+
+    WHY photons, not energy: Kramers' law is often written for ENERGY per
+    unit wavelength, which has lambda^3 on the bottom. A GM tube counts
+    photons, and each photon carries energy hc/lambda; dividing the energy
+    form by that gives the lambda^2 form above. So lambda^2 is the right
+    one here.
+
+Real spectra fall below Kramers' law at long wavelength, because
+long-wavelength X-rays are absorbed on the way: in the tube window, the
+air, and the detector window. Photoelectric absorption grows roughly as
+lambda^3, so the code multiplies by exp(-B (lambda/100 pm)^3).
+
+    WHY call B "empirical": B also soaks up other smooth effects that the
+    model does not include: the crystal's reflectivity changing with
+    wavelength, the detector efficiency, and the fact that one 0.1 deg
+    step covers a different width of wavelength at different angles
+    (d lambda / d theta = 2 d cos theta). B is a fudge factor that makes
+    the shape fit, not a measured absorption coefficient. Do not quote it
+    as physics.
+
+2.4  Turning angle into wavelength: Bragg's law
 -----------------------------------------------
-The NaCl crystal acts as a wavelength filter. X-rays reflecting off
-successive planes of atoms (spacing d) interfere constructively only when
+X-rays reflecting off successive planes of atoms (spacing d) add up in
+phase only when the extra path, 2 d sin(theta), is a whole number of
+wavelengths:
 
-    n lambda = 2 d sin(theta)        n = 1, 2, 3, ...  ("order")
+    n lambda = 2 d sin(theta)        n = 1, 2, 3, ...  (the "order")
 
-The goniometer turns the crystal to angle theta and the detector to 2 theta.
-At each angle only wavelengths with n lambda = 2 d sin(theta) reach the
-detector. Scanning theta therefore scans the spectrum.
+  - NaCl has lattice constant a = 564.02 pm. The crystal face reflects off
+    the (200) planes, spacing d = a/2 = 282.01 pm (d_NaCl in the code).
+  - At each angle only wavelengths with n lambda = 2 d sin(theta) get
+    through. Scanning theta therefore scans the spectrum.
+  - The same line appears once in each order. Predicted Bragg angles:
 
-  - NaCl has lattice constant a = 564.02 pm. The reflecting (200) planes
-    have spacing d = a/2 = 282.01 pm (variable d_NaCl in the code).
-  - The same K-alpha line appears at several angles, once per order:
-    about 16 deg (n=1), 33 deg (n=2) and 55 deg (n=3).
+          line          n=1      n=2      n=3
+          K-alpha1      15.852   33.113   55.029   deg
+          K-alpha2      15.892   33.205   55.231
+          K-beta        14.290   29.582   47.775
 
-How far apart the two K-alpha lines appear (differentiate Bragg's law):
+  - Higher orders overlap: at any angle, lambda (n=1), lambda/2 (n=2) and
+    lambda/3 (n=3) all satisfy Bragg's law. For the bremsstrahlung,
+    lambda/2 only exists once lambda/2 > lambda_min, i.e. above ~7.05 deg.
+    Below 7 deg the background is pure 1st order.
 
-    delta_theta = n * delta_lambda / (2 d cos(theta))     [radians]
+2.5  How far apart the doublet appears
+--------------------------------------
+Differentiate Bragg's law at fixed d:
 
-With delta_lambda = 0.38 pm:
+    delta_theta = n delta_lambda / (2 d cos theta)       (radians)
 
-    n=1 : 0.040 deg   (not resolvable, smaller than the 0.1 deg step)
-    n=2 : 0.093 deg   (partly resolved)
-    n=3 : 0.204 deg   (clearly resolved, visible as a shoulder)
+With delta_lambda = 154.44 - 154.06 = 0.38 pm:
 
-Higher orders spread the lines further apart. That is why the 3rd order is
-the best place to see the doublet.
+    n=1 : 0.040 deg   far smaller than the peak width: not resolvable
+    n=2 : 0.092 deg   partly resolved
+    n=3 : 0.202 deg   clearly resolved, a visible shoulder
 
-1.4  Counting statistics (Poisson noise)
-----------------------------------------
-The Geiger-Muller (GM) tube counts individual photons. Photon arrivals are
-random, so a count N fluctuates by about
+Higher orders spread the lines further apart, because n grows and
+cos(theta) shrinks. That is why n=3 is the place to study the doublet.
 
-    sigma_N = sqrt(N)                (Poisson statistics)
+2.6  Why the peaks are Gaussian, and how wide
+---------------------------------------------
+The measured peaks have sigma ~0.07-0.14 deg. A line's own natural width
+(Cu K-alpha1 ~2.3 eV out of 8048 eV) is only ~0.005 deg at n=1. So almost
+all the width comes from the INSTRUMENT: slit widths, beam divergence, and
+the crystal's mosaic spread. Many small independent blurring effects add
+up to a Gaussian shape (central limit theorem). So a Gaussian is a sensible
+peak model.
 
-The files store a RATE R = N / t, where t is the gate (counting) time per
-angle step. Then sigma_R = sqrt(R / t).
+    Alternative not used: a Voigt profile (Gaussian convolved with the
+    Lorentzian natural line shape). With the Lorentzian part 20x narrower
+    than the Gaussian, it would make no measurable difference and add a
+    parameter.
 
-KEY POINT: the noise belongs to the RAW number of counts the detector
-recorded: peak photons PLUS background photons. Subtracting a smooth
-background curve afterwards does not remove any noise. A point that measured
-20/s still has the scatter of 20/s even if it reads ~0 after subtraction.
+2.7  How an angle error becomes a wavelength error
+--------------------------------------------------
+From lambda = 2 d sin(theta)/n:
 
-1.5  Least-squares fitting
---------------------------
-A model f(x; p) has adjustable parameters p (for example the height,
-centre and width of a peak). Fitting means choosing p to minimise
+    delta_lambda / lambda = cot(theta) * delta_theta     (theta in radians)
 
-    chi^2 = sum over points i of  [ (y_i - f(x_i; p)) / sigma_i ]^2
+    n=1  theta ~16 deg  cot = 3.46
+    n=2  theta ~33 deg  cot = 1.52
+    n=3  theta ~55 deg  cot = 0.70
 
-  - sigma_i is the uncertainty on point i. A small sigma_i gives that point
-    a large weight (1/sigma_i^2), so the fit tries harder to pass near it.
-    The weights must therefore be right, or the best-fit values shift.
-  - chi^2 / dof ("reduced chi-squared", chi^2_nu), with
-    dof = (number of points) - (number of parameters), should be ~1 for a
-    good model with correct uncertainties. Much greater than 1 means the
-    model misses something, or the sigmas are too small.
+The same angle error does FIVE times less damage to the wavelength at n=3
+than at n=1. This is the single most important reason to prefer high
+orders for wavelengths. The same formula, read the other way, says an
+error in d moves the angle by -tan(theta) * (delta_d / d): high orders are
+also the most sensitive to a change in d (used in 4.5).
 
-scipy's curve_fit does this minimisation:
+2.8  Thermal expansion
+----------------------
+Warming the crystal by delta_T stretches d by
 
-  - p0             starting guess for the parameters
-  - bounds         allowed range for each parameter
-  - sigma          per-point uncertainties (the weights)
-  - absolute_sigma True:  trust sigma as real uncertainties.
-                   False: only the RELATIVE sizes of sigma matter; the
-                          overall scale is set from the scatter of the
-                          data. Use this when the gate time is unknown.
-  - returns popt (best-fit values) and pcov (covariance matrix; the square
-    roots of its diagonal are the parameter uncertainties)
+    delta_d / d = alpha * delta_T,      alpha(NaCl) ~ 40e-6 per K
 
-1.6  Interpolation is not fitting
+which moves every peak to a slightly LOWER angle, by tan(theta) * delta_d/d.
+Since tan(theta) grows with angle, real expansion shifts the n=3 peak about
+five times more than the n=1 peak. That pattern is how 4.5 tells expansion
+apart from a plain angle shift.
+
+2.9  Dead time of a GM tube
+---------------------------
+After each count a GM tube is blind for a short time tau (~100-200 us)
+while its gas discharge recovers. At high rates it misses photons, so the
+measured rate R is below the true rate N. Two textbook models:
+
+    NON-PARALYSABLE:  R = N / (1 + N tau)    <=>   N = R / (1 - R tau)
+        a photon arriving during the dead time is simply lost
+    PARALYSABLE:      R = N exp(-N tau)
+        a photon arriving during the dead time is lost AND restarts it
+
+GM tubes are usually treated as non-paralysable, and that is the model
+used. At R = 1000/s and tau = 164.5 us, N = 1.20 R: a 20% correction. It
+scales the peak HEIGHTS; it is symmetric about a peak's centre, so it
+barely moves peak POSITIONS.
+
+
+================================================================================
+PART 3 - THE STATISTICS TOOLKIT
+================================================================================
+
+3.1  Counting (Poisson) errors
+------------------------------
+Photon arrivals are random. A count N fluctuates by sigma_N = sqrt(N). The
+files store a RATE R = N/t (t = gate time), so
+
+    sigma_R = sqrt(R t) / t
+
+  - This is why the gate time matters: 10 s per step gives errors sqrt(10)
+    = 3.2 times smaller (relative to the rate) than 1 s per step.
+  - FLOOR OF ONE COUNT: a step that recorded 0 counts would get sigma = 0,
+    i.e. infinite weight in a fit. The code uses max(R t, 1) counts. This
+    is the usual fix; zero counts in a short gate do not mean "exactly zero
+    with no doubt".
+  - KEY POINT: the noise belongs to the RAW count, background included.
+    Subtracting a smooth background curve does not remove any noise. A
+    point that measured 20/s keeps the scatter of 20/s even if it reads ~0
+    after subtraction. So errors are always computed from the raw counts,
+    BEFORE anything is subtracted.
+
+3.2  Propagating an error through a formula
+-------------------------------------------
+For y = f(x):  sigma_y = |df/dx| sigma_x. Used in the code for:
+
+    dead-time correction  N = R/(1 - R tau)
+                          sigma_N = sigma_R / (1 - R tau)^2
+    tube voltage          U = 1239.84 / lambda_min
+                          sigma_U = U sigma_lambda / lambda_min
+    wavelength            lambda = 2 d sin(mu) / n
+                          sigma_lambda = 2 d cos(mu) / n * sigma_mu  (mu in rad)
+
+3.3  Least-squares fitting and chi-squared
+------------------------------------------
+A model f(x; p) has a few adjustable parameters p. Fitting chooses p to
+minimise
+
+    chi^2 = sum over points [ (y_i - f(x_i; p)) / sigma_i ]^2
+
+  - Each point is weighted by 1/sigma_i^2: precise points count more. So
+    the sigmas must be right, or the best-fit values shift.
+  - REDUCED CHI-SQUARED  chi^2_nu = chi^2 / dof,  dof = points - parameters.
+      ~1   : the model fits to within the error bars. Good.
+      >>1  : the model misses something (or the error bars are too small).
+      <<1  : the error bars are too big (or too few points to judge).
+  - scipy's curve_fit returns the best-fit values popt and the covariance
+    matrix pcov. sqrt(diagonal of pcov) are the parameter errors. The
+    off-diagonal terms say how two parameters move together (3.6).
+
+3.4  When to trust the error bars: the scaling rule
+---------------------------------------------------
+curve_fit has a switch, absolute_sigma:
+
+    True   the sigmas are real uncertainties; parameter errors come
+           straight from them.
+    False  only the RELATIVE sizes of the sigmas matter. curve_fit
+           rescales all parameter errors by sqrt(chi^2_nu), UP or DOWN.
+
+The rule used in fits_copy.py (function weighted_fit) is a mix:
+
+    trust the Poisson error bars (absolute_sigma=True), then
+    if chi^2_nu > 1: scale the parameter errors UP by sqrt(chi^2_nu)
+    if chi^2_nu < 1: leave them alone
+
+    WHY up: chi^2_nu > 1 means the model does not describe the data to
+    within the counting noise (the peak is not exactly Gaussian, the
+    background model is approximate, ...). For the peak fits this was
+    tested: the error bars are right and the cause is the peak shape
+    (5.11, "Why are the reduced chi-squared values so high?"). The
+    scatter about the model is then the honest measure of how well the
+    parameters are known.
+    WHY never down: the counting noise is a physical floor. A chi^2_nu
+    below 1 with few points is usually luck, and shrinking the errors
+    below Poisson would claim precision the data cannot have.
+    WHY not absolute_sigma=False everywhere (what the code did before): it
+    scaled errors DOWN for the n=1 free two-Gaussian fit (chi^2_nu = 0.88).
+    It was originally chosen because the gate times were thought to be
+    unknown. They are now read from the .xry files, so the error bars can
+    be trusted.
+
+deadtime.py and angle_offset.py still use curve_fit's default
+(absolute_sigma=False). Their chi^2_nu are 5.7 and 26, both above 1, so
+the result is the same as the rule above.
+
+3.5  Statistical versus systematic errors
+-----------------------------------------
+  STATISTICAL (random): different for every point, shrinks as you collect
+  more data. Example: Poisson noise. The fit handles it.
+
+  SYSTEMATIC: the SAME for every point of a scan, does not shrink with more
+  data. Example: if the angle scale reads 0.06 deg too high, EVERY angle is
+  0.06 deg too high. More points do not help.
+
+The trap: you could add a systematic error to every point's error bar. That
+is WRONG. The fit would treat it as independent scatter, average it down by
+roughly sqrt(number of points), and report an error far too small. It also
+wrecks the chi^2.
+
+3.6  The "variants" method for systematic errors
+------------------------------------------------
+The correct, simple way, used throughout:
+
+    1. Run the whole analysis with every input at its best value
+       ("nominal").
+    2. Run it again with ONE uncertain input moved down by 1 sigma, and
+       again moved up by 1 sigma, everything else unchanged.
+    3. That input's systematic error on a result = half the difference
+       between the "up" and "down" answers:
+
+           sys = |result(+1 sigma) - result(-1 sigma)| / 2
+
+    4. Repeat for each input. Add all errors in quadrature:
+
+           total = sqrt( fit^2 + sys_1^2 + sys_2^2 + ... )
+
+    WHY rerun the whole thing: the input may affect the result through
+    several steps (e.g. the angle offset changes the bremsstrahlung fit,
+    which changes the background subtracted under each peak, which changes
+    the peak fit). Rerunning catches all of that automatically, with no
+    derivatives to work out by hand.
+    WHY half the up-down difference: for a small shift the result moves
+    linearly, so half the full swing is the change per 1 sigma. It is just
+    the numerical derivative times sigma.
+    WHY quadrature: the sources (dead time, zero offset, alignment, ...)
+    are physically independent, so their errors add like independent
+    random variables. Quadrature is only right for INDEPENDENT errors;
+    3.7 says what to do when they are not.
+
+3.7  Correlated errors, and when errors cancel
+----------------------------------------------
+Two results that share the same systematic are CORRELATED: if the angle
+scale is really 0.06 deg high, ALL fitted centres are 0.06 deg high
+together.
+
+  - In a DIFFERENCE of two angles from the same scan, a shared angle shift
+    CANCELS. Example: the doublet separation mu2 - mu1. Its alignment,
+    repeatability and zero-offset errors come out as exactly 0.
+  - In an AVERAGE of results that share a systematic, that systematic does
+    NOT average down. Averaging the n=1, 2, 3 wavelengths as if their errors
+    were independent would understate the error. So quote the best single
+    order (n=3) instead.
+  - Within one fit, two parameters can be correlated too (e.g. mu1 and mu2
+    in a two-Gaussian fit: if one moves right the other tends to move left
+    to keep the sum in place). The error on mu2 - mu1 then needs the
+    covariance:
+
+        sigma(mu2 - mu1) = sqrt( var(mu1) + var(mu2) - 2 cov(mu1, mu2) )
+
+3.8  Interpolation is not fitting
 ---------------------------------
-  - An INTERPOLATING SPLINE passes exactly through every data point,
-    noise included. It is good for drawing a smooth line through the data.
-  - A FIT uses a physical model with few parameters and goes through the
-    data "on average", weighted by the uncertainties.
+  - An INTERPOLATING SPLINE passes exactly through every data point, noise
+    included. It is good for DRAWING a smooth line through the data.
+  - A FIT uses a physical model with few parameters and passes through the
+    data "on average", weighted by the errors.
 
-A spline evaluated at 2000 points contains no more information than the
-data points it passes through. Fitting a model to the spline instead of the
-data invents extra "measurements", ignores the uncertainties, and makes the
-answer depend on the interpolation method. So in this code the spline is
-for display only, and every fit is to the measured points.
+A spline evaluated at 2000 points holds no more information than the
+points it passes through. Fitting a model to the spline instead of the data
+invents 2000 fake "measurements", ignores the error bars, and makes the
+answer depend on the interpolation method. So: splines for display only,
+every fit to the measured points.
 
-1.7  Gaussians: height versus area
+3.9  Gaussians: height versus area
 ----------------------------------
     g(x) = A exp( -(x - mu)^2 / (2 sigma^2) )
 
-    A     = peak HEIGHT (amplitude)
-    mu    = centre (mean)
-    sigma = width (FWHM = 2.355 sigma)
-    AREA  = A * sigma * sqrt(2 pi)   <- this is the INTENSITY (photon count)
+    A      peak HEIGHT          mu  centre          sigma  width
+    FWHM = 2.355 sigma          AREA = A sigma sqrt(2 pi)
 
-Two Gaussians with the same height but different widths have different
-intensities. A ratio of intensities is therefore a ratio of AREAS. It equals
-the ratio of heights only if the widths are the same.
-
-The Gaussian shape is justified here because the measured peak width
-(sigma ~ 0.1 deg) comes from the instrument (slit widths, beam divergence,
-crystal mosaic). The lines' own natural width is only ~0.005 deg.
+The AREA is the intensity (total photons in the line). Two Gaussians of
+equal height but different widths have different intensities. A ratio of
+intensities is a ratio of AREAS; it equals the ratio of heights only if
+the widths are equal. This matters for the constrained fit (5.8).
 
 
 ================================================================================
-PART 2 - THE CODE, STAGE BY STAGE
+PART 4 - THE CALIBRATION AND ERROR FILES
 ================================================================================
 
-2.1  Loading the data
+Each section answers: what question, what data, what method, why that
+method, what it hands to fits_copy.py, and what to watch out for.
+
+--------------------------------------------------------------------------------
+4.1  deadtime.py - how long is the GM tube blind after each count?
+--------------------------------------------------------------------------------
+DATA: current_characterisation.csv. The goniometer was held at one angle
+and the tube current stepped from 0.05 to 1 mA. The 0 mA row has no
+reading and is dropped. 7 points.
+
+IDEA: at fixed voltage the true photon rate is proportional to the current,
+N = k I. The measured rate starts proportional too, then bends over and
+saturates as dead-time losses grow (3202/s at 1 mA instead of ~7000/s).
+The amount of bending gives tau.
+
+METHOD: fit both models of 2.9 with N = k I. Free parameters k and tau.
+Poisson weights sqrt(R/t) with t = 10 s (the rates have one decimal place).
+
+RESULT:
+    non-paralysable  tau = 164.5 +/- 5.0 us   chi^2_nu = 5.7   <- USED
+    paralysable      tau = 109.9 +/- 2.1 us   chi^2_nu = 5.9
+    linearised check tau = 179.5 us
+
+CHOICES AND WHY
+  - Non-paralysable is the standard model for GM tubes. Both models fit
+    about equally badly (chi^2_nu ~ 6), so the data cannot choose. The
+    effect of the choice: at ~1000/s the paralysable model corrects by
+    x1.15 instead of x1.22. That changes peak HEIGHTS by ~6% but no angle,
+    wavelength or voltage (dead time is symmetric about a peak).
+  - A direct non-linear fit rather than the straight line 1/R = (1/k)(1/I)
+    + tau. Taking 1/R distorts the error bars (the small rates at low
+    current dominate) and the straight-line fit here is unweighted. It is
+    printed and plotted only as a cross-check; it gives 179.5 us, in the
+    same region.
+  - chi^2_nu = 5.7 > 1, so the error on tau is scaled up by sqrt(5.7)
+    (curve_fit's default does this). Possible causes: current not exactly
+    proportional to the set value, or tube drift. The scaled error covers
+    it.
+
+HANDS TO fits_copy.py:  tau, tau_err (non-paralysable).
+
+--------------------------------------------------------------------------------
+4.2  angle_offset.py - where is the true zero of the angle scale?
+--------------------------------------------------------------------------------
+DATA: Test_run_long_run4.csv (column 4 of Friday's Test_run_long.xry, 10 s
+per step, 0.1 mA). Crystal removed; the detector swept through the direct
+beam from -2.6 to +2.5 deg.
+
+IDEA: with no crystal, the undeflected beam goes straight into the
+detector, so the count rate peaks where the angle reads TRUE zero. If it
+peaks at +0.062 deg, every reading is 0.062 deg too high:
+
+    theta_true = theta_measured - zero_offset
+
+METHOD:
+  1. Dead-time correct the rates (the peak reaches ~2900/s, where the tube
+     loses almost half its counts: N = 1.9 R).
+  2. Fit a Gaussian plus a constant background. Floor of one count in
+     10 s on the error bars.
+  3. Repeat with tau -/+ 1 sigma (3.6) for the dead-time error on the
+     centre.
+  4. Compute the CENTROID (intensity-weighted mean angle) of the points
+     within 3 widths of the centre, after removing the background. This
+     uses no model.
+
+RESULT:
+    Gaussian centre        +0.0618 deg   (fit error 0.0025, dead time 0.0000)
+    centroid               +0.0564 deg
+    shape error            |difference| = 0.0054 deg
+    zero_offset = +0.0618 +/- 0.0060 deg
+
+CHOICES AND WHY
+  - Dead-time correction first: dead time flattens the top of the peak.
+    Without it a Gaussian cannot describe the shape (chi^2_nu 78 raw, 26
+    corrected). Flattening is symmetric, so the centre barely moves
+    (+0.0619 raw, +0.0618 corrected).
+  - The shape error: chi^2_nu = 26 says the beam profile is NOT a
+    Gaussian (probably closer to an image of the slits, with a flatter top
+    and different tails). When the model is wrong, the centre depends on which
+    model you pick. The Gaussian centre and the model-free centroid are
+    two reasonable choices; their difference is a fair estimate of the
+    shape uncertainty, and is added in quadrature. This more than doubles
+    the error (0.0025 -> 0.0060 deg).
+  - Gaussian centre as the central value rather than the centroid: the
+    centroid depends on where you cut the tails (here 3 widths) and on the
+    background level; the fit uses all the points. Either would do; the
+    difference is already in the error.
+
+WATCH OUT (important, unresolved): the direct beam locates the zero of the
+DETECTOR arm. The Bragg peaks are set mainly by the CRYSTAL angle, and the
+crystal's own zero (is its face exactly along the beam at theta = 0?)
+cannot be seen with the crystal removed. Whether the 0.062 deg applies
+fully to theta, or half of it (if the scan's angle was the detector angle
+2 theta), depends on the scan mode, which the CSV does not record. See
+Part 9, item 1.
+
+HANDS TO fits_copy.py:  zero_offset, zero_offset_err.
+
+--------------------------------------------------------------------------------
+4.3  build_error_csvs.py - peak tables for the alignment and temperature runs
+--------------------------------------------------------------------------------
+Lives in "Error analysis CSVs". Reads the raw .xry files directly, so it
+also reads each run's current, gate time and voltage. Writes:
+
+    alignment_full_scans.csv, alignment_friday_normal_1st_order.csv,
+    temperature_full_scans.csv          the rates with Poisson errors
+    alignment_peak_positions.csv,
+    temperature_peak_positions.csv      fitted centre, height, FWHM, chi^2
+                                        and shift of every line in every run
+    runs_used.csv                       which file and column each run is
+
+METHOD for each line in each run:
+  1. Find the highest point inside the line's search window.
+  2. Fit a Gaussian plus a straight-line background to +/-0.4 deg around it.
+  3. If chi^2_nu > 1, scale the centre's error up by sqrt(chi^2_nu) (the
+     same rule as 3.4).
+  4. Reject the fit if the peak is too close to the edge of the scan, the
+     centre wanders outside the window, or the height is below 3 sigma.
+  5. Shift = this run's centre minus the reference run's centre; its error
+     = both centre errors in quadrature.
+
+CHOICES AND WHY
+  - Local Gaussian + sloping line over +/-0.4 deg: these runs are full
+    scans with many lines; a small window around each peak with a local
+    straight baseline is enough to find the CENTRE, which is all these
+    files are for. No bremsstrahlung model is needed.
+  - Raw rates, no dead-time correction: dead time is symmetric about a
+    peak, so centres are unaffected. Consequence: the HEIGHTS (and the
+    "intensity per mA" ratios printed in 4.4) are distorted, because dead
+    time squashes high rates more than low ones. Treat those ratios as
+    rough.
+  - K-alpha at n=1 at 0.6 mA has chi^2_nu of 30-300: the peak is squashed
+    by dead time and is a doublet. The sqrt(chi^2_nu) scaling inflates its
+    error accordingly.
+
+--------------------------------------------------------------------------------
+4.4  alignment_error.py - how much does crystal alignment move the peaks?
+--------------------------------------------------------------------------------
+QUESTION: the crystal sits in a holder. If it is slightly tilted, every
+peak appears at the wrong angle. How big could that error be?
+
+DATA (from 4.3): peak centres in
+    normal orientation:  Thursday 0.6 mA (REFERENCE), Thursday 0.12 mA,
+                         Friday 0.12 mA, Friday 0.6 mA
+    flipped about the ROLL axis (Friday), flipped about the YAW axis (Friday)
+Only the Cu K-alpha / K-beta lines; the tungsten side peaks are left out.
+
+PART A - REPEATABILITY. How much does the same peak move between repeat
+normal scans when nothing is deliberately changed? Sample standard
+deviation of each line's centre over the 2-4 normal runs, then POOLED over
+all lines:
+
+    pooled sigma_repeat = sqrt( sum of (runs-1) * std^2  /  sum of (runs-1) )
+                        = 0.0143 deg   (7 degrees of freedom)
+
+    WHY pooled: each line has only 2-4 runs. A standard deviation from 2
+    values is itself uncertain by ~70%. Pooling assumes all lines share
+    the same repeatability (reasonable: it is the same goniometer) and
+    gives a much steadier number. The per-line values are printed for
+    comparison (0.005-0.032 deg; the 0.032 is n=3 K-alpha from weak 1 s
+    scans, fit errors ~0.025 deg, so mostly noise).
+
+PART B - ALIGNMENT SHIFT. Shift of each line in the flipped scans relative
+to the reference. Fitted with
+
+    shift = a + b tan(theta)
+
+  a = a constant angle shift (tilt, zero-type error)
+  b = a change that grows like tan(theta), i.e. looks like a change in d
+
+    roll:  a = -0.1274 +/- 0.0171 deg,  b = -0.0004 +/- 0.0429 (0.0 sigma)
+           constant only: a = -0.1275 +/- 0.0062 deg, chi^2_nu = 0.34
+    yaw:   only 2 lines found; constant only a = -0.0665 +/- 0.0150 deg
+
+The roll shift is the SAME for every line (b is zero) and 13-23x each
+line's own repeatability (about 9x the pooled value): a real, constant
+tilt effect.
+
+    sigma_align = |a_roll| / 2 = 0.0637 deg
+
+CHOICES AND WHY
+  - HALF the shift: if flipping the crystal reverses the misalignment,
+    normal = true + e and flipped = true - e, so the shift is 2e and the
+    true centre lies MIDWAY. The normal scan is then off by e = half the
+    shift.
+  - Used as an UNCERTAINTY (+/-), not a correction. Two reasons:
+     (1) we do not know the flip reverses the error exactly;
+     (2) the evidence is contradictory. Applying it as a correction (all
+         angles 0.064 deg lower) brings the K-alpha1 peaks closer to
+         Bragg (+0.16 -> +0.10 deg) but pushes U from 35.83 to 36.47 kV,
+         further from the 35 kV set on the tube. Moving the other way does
+         the reverse (U 35.21 kV, K-alpha1 off by +0.23 deg). No single
+         constant shift fixes both, so it is honest to carry it as an
+         error rather than pretend to know the true value.
+  - ROLL, not yaw: the roll-flipped crystal still gave strong peaks (both
+    orders, 3 lines) with a constant shift. After the yaw flip the
+    intensity fell ~10x relative to the roll flip and only 2 lines could
+    be fitted: the crystal was badly misaligned, so yaw is a worst case,
+    not a typical error. It is printed as a cross-check only.
+  - One CONSTANT value for every line: b = 0 means the error does not
+    grow with angle, so the same 0.0637 deg applies at 3.6 deg (the
+    bremsstrahlung onset) and at 55 deg (n=3), where no flipped scan was
+    taken. This is an extrapolation and is stated as such.
+
+HANDS TO fits_copy.py:  sigma_align_constant = 0.0637 deg,
+                        sigma_repeat_pooled  = 0.0143 deg.
+
+--------------------------------------------------------------------------------
+4.5  temperature_error.py - does temperature change d?
+--------------------------------------------------------------------------------
+QUESTION: d = 282.01 pm is the value at room temperature. If the crystal
+was warmer or cooler, d was different, and every wavelength from Bragg's
+law is off by the same fraction.
+
+DATA (from 4.3): Tuesday's unheated and heated full scans. Tuesday is
+before the angle fix, so only the heated-minus-unheated SHIFT of each line
+is used; any constant offset common to both runs cancels.
+
+METHOD: 2.8 says expansion shifts each line by -tan(theta) delta_d/d, while
+an angle-scale drift between the two runs shifts every line equally.
+Fit the five shifts with
+
+    shift = delta_beta_0 - tan(theta) * delta_d/d
+
+and with each term alone:
+
+    both terms        delta_beta_0 = -0.0147 +/- 0.0063 deg,
+                      delta_d/d = (-1.0 +/- 2.8)e-4,  chi^2_nu = 0.09
+    constant only     delta_beta_0 = -0.0127 +/- 0.0030 deg, chi^2_nu = 0.10
+    expansion only    delta_d/d = (+4.7 +/- 1.3)e-4,  chi^2_nu = 1.44
+
+CONCLUSION: the shifts do NOT grow with tan(theta); a constant shift
+explains them as well as both terms together. No expansion is detected.
+Upper limit (heating can only increase d, so one-sided, 2 sigma):
+delta_d/d < 4.5e-4, i.e. the crystal warmed by less than ~11 K.
+
+    WHY not use the per-line "delta_d_over_d" column of the peak table: it
+    assumes each shift is pure expansion. At n=1 a small constant angle
+    shift then looks like a big expansion (cot theta is large), giving
+    ~9e-4, an overestimate. Fitting all lines together separates the two.
+    WHY chi^2_nu so far below 1 (0.09): the centre errors from 4.3 were
+    already scaled up by sqrt(chi^2_nu) of each peak fit, so they are
+    generous. That is fine for an upper limit (conservative).
+
+TWO NUMBERS FOR THE ERROR BUDGET:
+  - THERMAL: the lab temperature during the real measurements is uncertain
+    by sigma_T, so d is uncertain by
+
+        sigma_d/d = alpha sigma_T = 40e-6/K x 2 K = 8e-5
+
+    sigma_T = 2 K is an ASSUMPTION (set at the top of the file). Replace it
+    with the recorded lab temperature if you have one. This error is
+    applied to d itself, so it reaches every wavelength (5.10).
+  - ANGLE STABILITY: delta_beta_0 = 0.0147 deg is an angle drift between
+    two runs taken the same day. That is the SAME kind of error as the
+    repeatability of 4.4 (0.0143 deg), and the same size. Adding both
+    would count one effect twice, so fits_copy.py uses the repeatability
+    and prints this only as an independent cross-check. The agreement of
+    the two (0.0143 vs 0.0147) is good evidence that ~0.014 deg is the real
+    run-to-run angle reproducibility.
+
+HANDS TO fits_copy.py:  thermal_d_over_d = 8e-5,
+                        sigma_stability = 0.0147 deg (cross-check only).
+
+
+================================================================================
+PART 5 - THE MAIN ANALYSIS: fits_copy.py, STAGE BY STAGE
+================================================================================
+
+5.1  Loading the data
 ---------------------
-  Cu_NaCl_long_1.2KPeak.csv  Full scan, 2.5-62.3 deg in 0.1 deg steps.
-                             Integer rates (consistent with a 1 s gate).
-                             Variables: measured_full (raw); angle, rate, sigma (corrected)
-  1st_order_long.csv         15.5-16.5 deg, the n=1 K-alpha peak.
-                             Variables: measured_n1
-  2nd_Order_Good.csv         32.0-35.5 deg, the n=2 K-alpha peak.
-                             Variables: measured_n2
-  3rd_Order_Long_Good.csv    Column 1 repeats the n=2 scan; column 2 is the
-                             n=3 scan (53.5-56.5 deg). Only rows with an
-                             n=3 value are kept.
-                             Variables: measured_n3
+  Cu_NaCl_long_1.2KPeak.csv  full scan, 2.5-62.3 deg, 599 points
+                             -> measured_full
+  1st_order_long.csv         15.5-16.5 deg, 11 points      -> measured_n1
+  2nd_Order_Good.csv         32.0-35.5 deg, 36 points      -> measured_n2
+  3rd_Order_Long_Good.csv    column 2 repeats the n=2 scan; column 3 is
+                             the n=3 scan (53.5-56.5 deg, 31 points).
+                             Only rows with an n=3 value are kept.
+                                                           -> measured_n3
 
-Settings stored in the .xry files (all at 35 kV):
+gate_full = 1 s and gate_peaks = 10 s, from the .xry files (1.2).
 
-  full scan   Thursday, 0.12 mA, 1 s per step
-  n=1 scan    Thursday, 0.12 mA, 10 s per step
-  n=2, n=3    Friday,   1.0 mA,  10 s per step   (Friday/Task1)
+    WHY separate close-up scans at all: the full scan counts 1 s per step,
+    so the weak n=3 peak (~32/s in the full scan) is noisy. The close-ups
+    count 10 s per step and, for n=2 and n=3, at 8x the current, giving
+    far better statistics on exactly the region that matters.
 
-So the gate times are KNOWN, not assumed. The n=2 and n=3 scans were taken
-at 8x the current, which is why they are ~7x more intense than the full
-scan (2.3): 8x the photons, minus the extra dead-time loss at the higher
-rate.
+5.2  Imported calibrations and errors
+-------------------------------------
+    tau, tau_err                  164.5 +/- 5.0 us       (4.1)
+    zero_offset, zero_offset_err  0.0618 +/- 0.0060 deg  (4.2)
+    sigma_align_constant          0.0637 deg             (4.4)
+    sigma_repeat_pooled           0.0143 deg             (4.4)
+    thermal_d_over_d              8e-5                   (4.5)
+    sigma_stability               0.0147 deg             (4.5, printed only)
 
-2.2  Corrections and error bars: correct(scan, gate_time, tau, offset)
-----------------------------------------------------------------------
-Every scan goes through this before anything else. It returns four arrays:
+5.3  correct(scan, gate_time, tau, offset)
+------------------------------------------
+Every scan goes through this first. It returns four arrays:
 
-  measured angle   kept only for SELECTING points (see below)
-  true angle       theta_true = theta_measured - zero_offset
-                   (zero_offset from the direct-beam scan, angle_offset.py)
-  true rate        N = R / (1 - R tau)
-                   (non-paralysable dead time, tau from deadtime.py)
-  error on N       sigma_N = sigma_R / (1 - R tau)^2
+    measured angle   kept only for SELECTING points (see below)
+    true angle       measured angle - offset
+    true rate        N = R / (1 - R tau)
+    error on N       sigma_R / (1 - R tau)^2,  sigma_R = sqrt(max(R t, 1))/t
 
-sigma_R is the Poisson error of the RAW count, sqrt(R t) / t, with a floor
-of one count so a zero-count point does not get sigma = 0. It is taken
-BEFORE anything is subtracted, because the Poisson noise belongs to the raw
-count (see 1.4). dN/dR = 1/(1 - R tau)^2 carries it through the dead-time
-correction. These errors are the error bars on every figure and the
-weights in every fit.
+Size of the dead-time correction at each scan's highest rate:
+    full x1.21, n=1 x1.21, n=2 x1.22, n=3 x1.04
 
-Gate time t: 1 s for the full scan and 10 s for the dedicated scans
-(gate_full, gate_peaks), read from the .xry files (2.1).
+CHOICES AND WHY
+  - Errors from the RAW counts, before any correction or subtraction
+    (3.1), then carried through the dead-time formula (3.2).
+  - SELECT POINTS BY MEASURED ANGLE: every peak window and flank window in
+    the code was read off a plot of the measured angle. The data sit on a
+    0.1 deg grid. If the windows were applied to the shifted angles, a
+    0.062 deg shift (or the +/-0.064 deg alignment variants) could push an
+    edge point in or out. With only 9 points in the n=1 peak, losing one
+    changes the fit noticeably, and the variants would then measure the
+    effect of losing a point rather than the effect of the angle shift.
+    Selecting on the measured angle keeps exactly the same points in every
+    variant; only their x-values move.
 
-Every fit goes through weighted_fit(), which trusts these Poisson error
-bars (absolute_sigma=True). If chi^2/dof > 1 the model misses something
-the error bars do not cover, so the parameter errors are scaled UP by
-sqrt(chi^2/dof). They are never scaled DOWN when chi^2/dof < 1: the
-counting noise is a hard floor. (Before, absolute_sigma=False scaled them
-both ways, which shrank the errors of the n=1 two-Gaussian fit.)
+5.4  The error variants
+-----------------------
+The method of 3.6, with these sources:
 
-Why select points by measured angle: every peak and flank window in the
-code was read off a plot of the measured angle. The data lie on a 0.1 deg
-grid, so shifting them by 0.062 deg against the same window numbers would
-drop or add an edge point (the n=1 peak has only 9 points after cropping).
-Selecting on the measured angle keeps exactly the same points as before.
+    source         moved                     by +/-       from
+    dead time      tau                       5.0 us       deadtime.py
+    zero offset    every angle               0.0060 deg   angle_offset.py
+    alignment      every angle               0.0637 deg   alignment_error.py
+    repeatability  every angle               0.0143 deg   alignment_error.py
 
-Size of the dead-time correction at the highest rate in each scan:
-  full scan x1.21, n=1 x1.21, n=2 x1.22, n=3 x1.04.
+That is 1 nominal + 4 x 2 = 9 complete runs of the analysis (dict
+"variants", built from dict "error_sources"). Every fit below is done for
+every variant. report() prints each result as
 
-2.2a Error budget: the variants
--------------------------------
-The systematic errors are SHARED by every point. Adding them to each error
-bar would wrongly treat them as independent scatter. Instead the whole
-analysis is repeated nine times (the dict "variants", built from
-"error_sources"), each time with ONE source moved by -1 or +1 sigma:
+    value +/- total   (fit ..., dead time ..., zero offset ..., alignment ...,
+                       repeatability ..., [extra])
 
-  source          what is moved                  size     from
-  dead time       tau                            5.0 us   deadtime.py
-  zero offset     angle scale                    0.0060   angle_offset.py
-  alignment       angle scale                    0.0637   alignment_error.py
-  repeatability   angle scale                    0.0143   alignment_error.py
-                                                (deg)
+and returns the totals, which are the ones written on the figures. The
+figures themselves always show the nominal variant.
 
-Alignment and repeatability are errors on where the angle scale really is,
-so, like the zero offset, they move every angle by the same amount.
+Two errors are not variants and are passed to report() as "extra":
+    fit range   bremsstrahlung only (5.6)
+    thermal     wavelengths only (5.10)
 
-  - zero offset: fit error, dead time, and the difference between the
-    Gaussian centre and the model-free centroid of the direct beam
-    (0.0054 deg; the beam is not a true Gaussian, chi^2/dof ~ 26).
-  - alignment: half the shift seen when the crystal was flipped about its
-    roll axis (-0.1275 deg, the same for every line). If flipping reverses
-    the misalignment, the true centre lies midway.
-  - repeatability: scatter of the same peak between repeat normal scans,
-    pooled over all lines (7 dof). The heated-unheated angle shift
-    (0.0147 deg, temperature_error.py) is the same kind of error and the
-    same size, so it is printed as a cross-check and NOT added again.
+CHOICES AND WHY
+  - Alignment and repeatability are errors in WHERE THE ANGLE SCALE REALLY
+    IS, exactly like the zero offset. So they are applied the same way: by
+    moving every angle. This reuses the existing machinery, and it
+    automatically gives the right answer everywhere, including exactly
+    zero for differences of angles (3.7).
+  - Repeatability is added in quadrature with the fit error. Strictly, the
+    repeatability scatter already contains some fit noise (from the noisy
+    1 s scans it was measured on). But the close-up scans used here have
+    fit errors of only 0.001-0.008 deg, so the double counting is tiny
+    (e.g. sqrt(0.0143^2 + 0.004^2) = 0.0148). Slightly conservative,
+    much simpler.
+  - Applied as ONE shift to all scans at once, although each scan was a
+    separate run. For any single result (one centre, U, one separation)
+    this makes no difference. It would matter only for a result combining
+    two separate scans, and none is quoted.
 
-Every fit is done for every variant. For each result
+5.5  Figure 1: all four scans together - remove_offset()
+--------------------------------------------------------
+Puts each close-up scan on the same vertical level as the full scan, for
+DISPLAY: it subtracts the mean difference (close-up minus full scan,
+interpolated with np.interp) over the points outside the peak.
 
-  error from a source = |result(source high) - result(source low)| / 2
-  total error         = sqrt(fit^2 + sum of all source errors^2)
+    Offsets removed: n=1 -2.54/s, n=2 +14.50/s, n=3 +5.09/s
 
-which is the same method angle_offset.py uses for tau. report() prints
-each result as   value +/- total  (fit, dead time, zero offset, ...)
-and the totals are the ones shown on the figures. The figures themselves
-use the nominal variant. Two further errors that are not variants are
-passed to report() as "extra": the fit range of the bremsstrahlung fit
-(2.4) and the thermal error on d (2.10).
+FIGURE 1: all four scans, dead-time and zero-offset corrected, error bars.
 
-A shift common to every angle cancels in anything that is a DIFFERENCE of
-two angles in the same scan, such as the doublet separation (2.9): there
-the alignment, repeatability and zero-offset errors all come out as 0.
+CAVEAT: the n=2 and n=3 close-ups are ~7x more intense than the full scan
+(n=2 peak 1090/s against 169/s). The reason is the current, 1.0 mA against
+0.12 mA: 8x the photons, minus extra dead-time loss. So the true relation
+is a SCALE factor, not an offset; dividing each scan by its current would
+be the right way to overlay them. Only Figure 1 is affected: the peak fits
+fit their own baseline (5.7).
 
-2.3  remove_offset(scan, peak_low, peak_high)
----------------------------------------------
-Puts each dedicated scan on the same vertical level as the full scan. It
-  1. picks the points outside the peak window [peak_low, peak_high];
-  2. linearly interpolates the full scan onto the same angles (np.interp);
-  3. takes the mean difference (dedicated - full) over those points;
-  4. subtracts that constant from the whole dedicated scan.
-It returns the shifted rates and the offset.
+5.6  Checkmark 1: bremsstrahlung fit and tube voltage
+-----------------------------------------------------
+STEP A - REMOVE THE PEAKS. peak_windows lists each characteristic line
+(measured angle, deg):
 
-This is used for Figure 1 ONLY. The next stage fits its own baseline under
-each peak, which absorbs any constant, so the peak fits use the corrected
-scans without this shift.
+    14.2-14.9  K-beta n=1         29.6-30.1  K-beta n=2
+    15.2-15.6  W L-alpha1 n=1     33.0-33.7  K-alpha n=2
+    15.8-16.4  K-alpha n=1        47.7-48.0  K-beta n=3
+                                  54.8-55.5  K-alpha n=3
 
-Caveat: the n=2 and n=3 dedicated scans are about 7x more intense than the
-full scan (for example the n=2 peak is 1090/s against 169/s), so the true
-relationship is a scale factor, not an offset. The reason is the tube
-current: 1.0 mA for n=2 and n=3 against 0.12 mA for the full scan (2.1).
+Points inside any window are dropped; 553 of 599 remain.
 
-FIGURE 1: all four scans (dead-time and zero-offset corrected) on one set
-of axes, with error bars.
+STEP B - ANGLE TO WAVELENGTH with Bragg's law, n=1.
 
-2.4  Checkmark 1 - bremsstrahlung fit and tube voltage
-------------------------------------------------------
-Step A: remove the peaks.
-    peak_windows lists the angle range of each characteristic line (K-beta
-    and K-alpha at n=1, 2, 3, plus a small line at 15.2-15.6 deg). Points
-    inside any window are thrown away. What remains (angle_bg, rate_bg)
-    should be bremsstrahlung only.
+STEP C - THE MODEL (2.3):
 
-Step B: convert angle to wavelength with Bragg's law, n=1:
-    wavelength_bg = 2 d sin(theta).
+    I(lambda) = A (lambda/lambda_min - 1)/lambda^2 exp(-B (lambda/100 pm)^3)
+                for lambda > lambda_min, 0 below
+    free: A (scale), lambda_min, B
 
-Step C: the model, kramers(wavelength, A, lambda_min, B):
+STEP D - THE FIT (fit_background, through weighted_fit):
+    dead-time-corrected rates, Poisson errors for 1 s, true angles.
+    chi^2_nu = 1.84 (550 dof), so fit errors x1.36. Run for every variant.
 
-    I(lambda) = A (lambda/lambda_min - 1) / lambda^2 * exp(-B (lambda/100 pm)^3)
-                for lambda > lambda_min, and 0 below it.
+STEP E - FIT-RANGE CHECK. The same fit to the background below 10 deg only
+(76 points): lambda_min = 35.19 pm (U = 35.23 kV) against 34.60 pm (U =
+35.83 kV) for the full range. The WHOLE difference is a "fit range"
+systematic.
 
-    - (lambda/lambda_min - 1)/lambda^2 is Kramers' law, the theoretical
-      bremsstrahlung spectrum in photons per unit wavelength. A GM tube
-      counts photons, so this is the right form.
-    - It is zero at lambda_min (Duane-Hunt), rises, peaks and falls.
-    - Kramers' law alone predicts too much at long wavelength, because
-      long-wavelength X-rays are absorbed in the tube window, the air and
-      the detector window. Photoelectric absorption goes roughly as
-      lambda^3, hence exp(-B lambda^3). In practice B also soaks up other
-      smooth wavelength effects (crystal reflectivity, detector efficiency,
-      the d(lambda)/d(theta) factor), so treat it as an empirical
-      correction.
-    - Free parameters: A (overall scale), lambda_min, B.
-
-Step D: weighted fit, fit_background(scan).
-    Uses the dead-time-corrected rates and errors from 2.2 (1 s per step)
-    and the zero-offset-corrected angles. It goes through weighted_fit
-    (2.2): chi^2/dof = 1.84, so the fit errors are scaled up by 1.36. It
-    is run for every variant (2.2a).
-
-Step D2: fit-range check.
-    The same fit to the background below 10 deg only, near the onset,
-    where the model's simplifications (the empirical absorption term, and
-    no 2nd-order bremsstrahlung, which starts at ~7 deg) matter least. It
-    gives lambda_min = 35.19 pm (U = 35.23 kV) against 34.60 pm for the
-    full range. The WHOLE change is taken as a "fit range" systematic. It
-    is about as large as the alignment error, and Figure 2 shows why: the
-    model undershoots the data around 5-10 deg.
-
-Step E: Duane-Hunt.
-    voltage = 1239.84 / lambda_min. Its fit error is propagated from the
-    error on lambda_min; its other errors come from the variants and the
-    fit-range check.
-
-    Angle errors matter most here: at the onset (~3.6 deg) a 0.062 deg
-    shift moves lambda_min by ~0.6 pm (1.7%), so the zero offset raises U
-    from 35.24 to 35.83 kV. By the same token the 0.064 deg alignment error
-    is worth 0.63 kV. The thermal error on d is worth only 0.003 kV.
+STEP F - DUANE-HUNT. U = 1239.84 / lambda_min, fit error propagated (3.2),
+the other errors from the variants and the fit-range check.
 
 FIGURE 2: background points with error bars and the Kramers fit.
 
-2.5  Checkmark 2 - isolating each K-alpha peak
-----------------------------------------------
-subtract_background(scan, popt_kramers, left_flank, right_flank)
+CHOICES AND WHY
+  - FIT THE WHOLE SPECTRUM SHAPE, not just the edge. lambda_min is where
+    the curve reaches zero, but right at the edge the counts are tiny
+    (0-20/s) and the edge is smeared by the instrument resolution. A model
+    of the whole hump uses all 553 points to pin down where it must start.
+  - Alternative tried: a straight line through the rising edge,
+    extrapolated to zero rate (the "textbook" Duane-Hunt method). It gave
+    U = 36.3 to 37.9 kV depending on which few points were used: far too
+    sensitive to the choice of points with 0.1 deg steps. Not used.
+  - WHY THE FIT-RANGE CHECK: the full-range fit also has to describe the
+    long tail, where the simple model is weakest (empirical absorption
+    term, 2nd-order bremsstrahlung above 7.05 deg, tungsten lines left in
+    the background). A model that is wrong in the tail can drag
+    lambda_min. Figure 2 shows the model undershooting the data around
+    5-10 deg, and chi^2_nu = 1.84 says it is not perfect. Fitting only near
+    the onset is the obvious test of how much that matters.
+  - WHY 10 deg: below ~7 deg there is no 2nd-order bremsstrahlung; 10 deg
+    keeps enough points past the top of the hump (~6 deg) to fix its
+    shape. The near-edge fit has chi^2_nu = 1.06: it describes its region
+    well.
+  - WHY THE WHOLE DIFFERENCE, not half: the variants move an input by a
+    known +/-1 sigma, so half the swing is right. Here there are just two
+    reasonable analyses and no way to say which is correct; the honest
+    error is the full difference between them.
+  - ABSOLUTE ERRORS ON THE PEAKS ARE NOT FOR U: angle errors matter most
+    here. The onset is at ~3.6 deg; a 0.064 deg shift there is 1.8% of the
+    angle, so 1.8% of lambda_min and of U (0.63 kV). The same angle error
+    at 55 deg is only 0.12% of the wavelength (2.7).
 
-  Run for every variant, each with its own Kramers fit. Crop and flank
-  windows are applied to the measured angle (2.2); the Kramers curve and
-  the line are evaluated on the true angle. Results: peaks[variant].
+5.7  Checkmark 2: isolating each K-alpha peak - subtract_background()
+---------------------------------------------------------------------
+Run for every variant, each with its own Kramers fit.
 
-  1. CROP the scan to [left_flank start, right_flank end]. This drops
-     neighbouring features, such as the small line at ~15.4 deg next to
-     the n=1 peak.
-  2. SUBTRACT the Kramers fit from 2.4 (it matters only at n=1; by 33 and
-     55 deg it is ~0).
-  3. FIT A STRAIGHT LINE (np.polyfit, degree 1) to the flanks only: the
-     flat regions either side of the peak. Then subtract it. This removes
-     any leftover offset or tilt without touching the peak shape.
-  4. Return the cropped angles, the baseline-free rates, the cropped raw
-     weights and the slope of the line.
+  1. CROP the scan to [left flank start, right flank end]. This removes
+     neighbouring features (e.g. W L-alpha1 at ~15.4 deg next to n=1).
+  2. SUBTRACT the Kramers fit from 5.6 (only matters at n=1; by 33 and 55
+     deg the bremsstrahlung is ~0).
+  3. FIT A STRAIGHT LINE to the FLANKS only (the flat parts either side of
+     the peak) and subtract it. This removes any leftover offset or tilt.
+  4. Return the cropped true angles, the baseline-free rates, the raw-count
+     errors, and the slope.
 
-  Flanks used (deg):   n=1: 15.7-15.8 and 16.4-16.5
-                       n=2: 32.3-32.9 and 33.8-35.5
-                       n=3: 53.5-54.5 and 55.7-56.5
+    flanks (measured deg)            points after cropping   flank points
+    n=1: 15.7-15.8 and 16.4-16.5     9                       4
+    n=2: 32.3-32.9 and 33.8-35.5     33                      25
+    n=3: 53.5-54.5 and 55.7-56.5     31                      20
 
-  After cropping, n=1 has 9 points, n=2 has 33 and n=3 has 31.
+    tilt removed (1/s per deg): n=1 -1.79, n=2 -2.35, n=3 0.00
 
-Makima spline (Akima1DInterpolator, method="makima"):
-    A smooth curve through every point, FOR DISPLAY ONLY (see 1.6). It
-    was chosen because:
-      - a plain cubic spline overshoots and "rings" where a sharp peak
-        meets a flat base;
-      - PCHIP cannot put a maximum anywhere except at a data point;
-      - makima avoids most overshoot and lets the maximum fall between
-        points.
+CHOICES AND WHY
+  - A straight line, not a curve: over 1-3 deg the remaining background is
+    nearly flat; a line is the simplest shape that can remove a tilt. A
+    higher polynomial could start bending into the peak.
+  - Fitted to the FLANKS ONLY, so the line cannot "eat" part of the peak.
+  - Errors stay the raw-count errors (3.1): subtracting a smooth curve
+    adds no new noise and removes none.
+  - n=1 has only 4 flank points (the close-up scan is only 1 deg wide).
+    That is the weakest baseline of the three; a wider n=1 scan would help.
+
+MAKIMA SPLINE (display only, 3.8):
+  - a plain cubic spline overshoots and "rings" where a sharp peak meets a
+    flat base;
+  - PCHIP cannot put a maximum anywhere except at a data point;
+  - makima (modified Akima) avoids most overshoot and lets the maximum fall
+    between points.
 
 FIGURE 3: the three baseline-free peaks with their splines.
 
-2.6  Single-Gaussian fit to each peak
--------------------------------------
-    gaussian(x, amplitude, mean, sigma)
+5.8  Single-Gaussian fit (Figure 4)
+-----------------------------------
+gaussian(x, amplitude, mean, sigma), fitted through weighted_fit with the
+raw-count errors. Start: height = highest point, centre = its angle, width
+0.1 deg. chi^2_nu printed: 14.8, 2.8, 10.4 for n = 1, 2, 3.
 
-  - Fit to the measured points, weighted by the raw-count sigmas, through
-    weighted_fit (2.2). chi^2/dof is printed for every peak fit.
-  - Starting guess: height = highest point, centre = angle of the highest
-    point, width = 0.1 deg.
-  - Prints amplitude, mean and sigma with the full error budget (2.2a).
-    The angle errors (zero offset, alignment, repeatability) go straight
-    onto every fitted centre. Alignment (0.064 deg) is by far the largest,
-    10-60x the fit error. Dead time changes the heights (and slightly the
-    widths) but not the centres.
+What it means: the peak is really the K-alpha1 + K-alpha2 doublet, so one
+Gaussian finds the intensity-weighted CENTRE of the pair. Compare it with
+the weighted mean wavelength (2 x 154.06 + 154.44)/3 = 154.19 pm, not with
+K-alpha1. Its width is inflated by the splitting, most at n=3 (sigma 0.140
+deg against 0.097 in the two-line fit). The large chi^2_nu at n=1 and n=3
+says one Gaussian is not the right shape - which is the point: it motivates
+the two-Gaussian fits.
 
-What the result means: the peak is really the K-alpha1 + K-alpha2 doublet,
-so one Gaussian gives the intensity-weighted CENTRE of the pair. Compare it
-with the weighted mean wavelength (2 x 154.06 + 154.44)/3 = 154.18 pm, not
-with K-alpha1 alone. The fitted width is inflated by the splitting,
-especially at n=3.
+All angle errors (zero offset, alignment, repeatability) go straight onto
+every fitted centre; alignment (0.064 deg) is 10-60x the fit error. Dead
+time changes heights, not centres.
 
-FIGURE 4: data, spline and single-Gaussian fit.
-
-2.7  Free two-Gaussian fit
---------------------------
-    two_gaussians(x, A1, mu1, sigma1, A2, mu2, sigma2)
-
-  - All six parameters are free. Fit to the measured points with the
-    raw-count weights.
-  - Starting guesses use the physics:
-        split = n * (154.44 - 154.06) / (2 d cos(theta))   (from 1.3)
-        K-alpha1 at (centre - split/3), K-alpha2 at (centre + 2 split/3).
-    With a 2:1 intensity ratio the centroid sits one third of the way from
-    K-alpha1 to K-alpha2, which is why the thirds appear.
-  - Bounds: heights and widths >= 0, centres inside the scanned range.
-
-This is an UNCONSTRAINED comparison fit. With nothing tying the two
-Gaussians to the physics, it often gives unphysical answers: K-alpha2
-taller than K-alpha1, or one width narrower than the instrument can
-produce. Those failures are what motivate the constrained fit next.
-At n=2 the second Gaussian is not constrained at all: with the
-corrections it shrinks to A2 ~ 7/s off to one side, and without them its
-partner's centre error was +/-78 deg. Do not quote the n=2 free fit.
-
-FIGURE 5: data, spline, both Gaussians and their sum, with a parameter box.
-
-2.8  Two-Gaussian fit with fixed intensity ratio and shared width
------------------------------------------------------------------
-    two_gaussians_fixed_ratio(x, A1, mu1, mu2, sigma)
-        = gaussian(x, A1, mu1, sigma) + gaussian(x, 0.518*A1, mu2, sigma)
-
-Two physical constraints are built in:
-
-  (1) SHARED WIDTH. Both lines are broadened by the same instrument at
-      almost the same angle, so they must have the same sigma.
-
-  (2) FIXED INTENSITY RATIO I2/I1 = 0.518. Intensity is AREA, A sigma
-      sqrt(2 pi) (see 1.7). Because the widths are equal, the area ratio
-      equals the height ratio, so setting A2 = 0.518 A1 really does fix
-      the intensity ratio. (If each line had its own sigma, a fixed height
-      ratio would NOT fix the intensity: the fit could change Kalpha2's area
-      by making it wider or narrower.)
-
-  Free parameters: A1, mu1, mu2, sigma (4 in all). The fit is to the
-  measured points with the raw-count weights. The result is expanded back
-  to six numbers [A1, mu1, sigma, 0.518 A1, mu2, sigma] so it plots in
-  the same way as 2.7.
-
-FIGURE 6: as Figure 5, for the constrained fit.
-
-2.9  Doublet separation
------------------------
-Prints delta_mu = mu2 - mu1 (K-alpha2 centre minus K-alpha1 centre) from
-the constrained fit, for each order, next to the prediction from 1.3. Its
-fit error includes the correlation between the two means:
-sqrt(var(mu1) + var(mu2) - 2 cov(mu1, mu2)). A constant angle shift
-(zero offset, alignment, repeatability) moves both means equally, so it
-cancels in delta_mu. That makes the separation the cleanest result here:
-only the fit error is left.
-
-2.10 K-alpha1 wavelength from each order
+5.9  Two-Gaussian fits (Figures 5 and 6)
 ----------------------------------------
-    lambda = 2 d sin(mu1) / n      (mu1 from the constrained fit, 2.8)
+FREE FIT (Figure 5), two_gaussians: all six parameters free.
+  - Starting guesses from physics: splitting from 2.5; K-alpha1 at
+    centre - split/3 and K-alpha2 at centre + 2 split/3 (with a 2:1
+    intensity ratio the centroid is one third of the way from K-alpha1 to
+    K-alpha2); heights 2:1.
+  - Bounds: heights and widths >= 0, centres inside the scan.
+  - It is a COMPARISON fit. With nothing tying the two Gaussians to the
+    physics it gives unphysical answers: at n=1 K-alpha2 comes out taller
+    than K-alpha1 with huge errors; at n=2 the second Gaussian shrinks to
+    A2 ~ 7/s off to one side. Do not quote it. Its failure is the reason
+    for the constrained fit.
 
-compared with the reference 154.06 pm. Its errors come from the variants
-like everything else, plus a "thermal" error: the lab temperature is
-uncertain by sigma_T (2 K, ASSUMED in temperature_error.py), so d is
-uncertain by alpha sigma_T = 8e-5 of itself, and so is lambda.
+CONSTRAINED FIT (Figure 6), two_gaussians_fixed_ratio: free A1, mu1, mu2
+and one shared sigma (4 parameters, not 6):
 
-An angle error delta_theta changes lambda by lambda cot(theta) delta_theta,
-so the same angle error hurts n=1 (cot = 3.5) five times more than n=3
-(cot = 0.7). n=3 gives the best wavelength.
+  (1) SHARED WIDTH: both lines are broadened by the same instrument at
+      almost the same angle, so they must have the same width.
+  (2) FIXED INTENSITY RATIO, A2 = 0.518 A1. Intensity is AREA (3.9).
+      Because the widths are equal, fixing the height ratio really fixes
+      the area ratio. (If each line had its own width, the fit could
+      change K-alpha2's intensity by making it wider or narrower, and the
+      "fixed" ratio would not be fixed.)
 
-The three wavelengths share the same alignment and repeatability errors
-(both are angle shifts common to every scan), so their errors are
-CORRELATED. Do not average them as if they were independent; quote n=3.
+    WHY constrain rather than leave free: two Gaussians 0.04-0.2 deg apart
+    inside a 0.1-0.14 deg-wide peak are nearly impossible to separate
+    freely: the fit can trade height for width for position. Physics
+    removes that freedom.
+    WHY mu2 is still free (not fixed at mu1 + predicted split): leaving it
+    free lets the data MEASURE the splitting, which is then a genuine test
+    of 2.5 (5.10).
+    CHECK on the fixed ratio: changing 0.518 to 0.50 or 0.53 moves mu1 by
+    at most 0.0015 deg and the n=3 separation by at most 0.0004 deg. That
+    is negligible against the other errors, so no error is added for it.
+
+chi^2_nu printed: 8.6, 2.8, 4.9. Still above 1 (the peak shape is not
+exactly two Gaussians, and n=1 has only 9 points), so errors are scaled up
+(3.4). Results are expanded back to six numbers [A1, mu1, sigma, 0.518 A1,
+mu2, sigma] so Figure 6 is drawn the same way as Figure 5.
+
+5.10 Results derived from the constrained fit
+---------------------------------------------
+DOUBLET SEPARATION  mu2 - mu1, with its fit error including the
+correlation of the two means (3.7), against the prediction of 2.5. Every
+constant angle shift cancels, so only fit and dead-time errors remain:
+this is the CLEANEST result of the experiment.
+
+K-ALPHA1 WAVELENGTH  lambda = 2 d sin(mu1) / n, against 154.06 pm. Errors:
+all variants, plus "thermal" = lambda x 8e-5 for the uncertainty in d.
+
+    WHY quote n=3: the angle error does 5x less damage there (2.7).
+    WHY not average the three orders: they share the alignment and
+    repeatability errors, so their errors are correlated (3.7). A naive
+    weighted mean would claim a much smaller error than is real.
+
+5.11 chi_squared.py - which peak model describes the data better?
+-----------------------------------------------------------------
+Compares the single Gaussian (5.8) with the constrained two-Gaussian fit,
+I2/I1 = 0.518 and shared width (5.9), for each order. It imports
+fits_copy.py, so it uses exactly the same peaks, fits and splines (nominal
+variant); the figures are drawn off-screen and the printout of
+fits_copy.py is silenced.
+
+For each order and model it prints:
+
+    N, k, dof    points, free parameters, dof = N - k - 2
+    chi2         sum of ((data - model)/error)^2, raw-count Poisson errors
+    chi2_nu      chi2/dof, +/- sqrt(2/dof)
+    p-value      chance of a chi2 this large from counting noise alone
+    vs spline    RMS gap between fitted curve and spline, % of peak height
+
+and then, for each order, which model is better and whether the second
+line is really needed.
+
+CHOICES AND WHY
+  - dof = N - k - 2, not N - k: the straight baseline (slope, intercept)
+    was fitted to the flanks of these same points (5.7), so it used up 2
+    degrees of freedom. The Kramers background came from the full scan, a
+    different data set, so it costs nothing here. (fits_copy.py's
+    weighted_fit uses N - k for its error scaling, so its printed chi2_nu
+    are slightly lower: e.g. 14.8 against 22.2 for n=1 with 9 points.)
+  - THE ERROR ON chi2_nu is sqrt(2/dof): if the model were right and the
+    only scatter were counting noise, chi2_nu would scatter about 1 by
+    this much. So a chi2_nu more than ~2 of these errors from 1 means the
+    model misses something real. Few points (n=1: dof 3-4) means a large
+    error, i.e. a weak test.
+  - CHI-SQUARED AGAINST THE DATA, NOT THE SPLINE. The spline passes
+    exactly through every data point, so at the measured angles a chi2
+    against the spline IS the chi2 against the data. Between the points
+    the spline only interpolates. Evaluating chi2 on 2000 spline points
+    would invent 2000 "measurements" with no errors and fake the dof
+    (3.8). So the spline enters only as the descriptive "vs spline"
+    column, with no statistical claim.
+  - THE F-TEST. Setting mu2 = mu1 in the two-Gaussian model gives a single
+    Gaussian (of height 1.518 A1), so the single Gaussian is a special
+    case of it: the models are NESTED. Adding a parameter always lowers
+    chi2 a little; the F-test asks whether it lowered it by more than
+    chance:
+
+        F = (chi2_single - chi2_double) / (chi2_double / dof_double)
+
+    with 1 and dof_double degrees of freedom. Dividing by the two-Gaussian
+    chi2_nu (rather than assuming it is 1) keeps the test fair when
+    chi2_nu > 1. p < 0.05: the second line is needed.
+
+RESULTS
+    order  model               dof  chi2_nu        p-value   vs spline
+    n=1    single Gaussian       4  22.2 +/- 0.7   2e-18     3.1%
+           2 Gaussians, 0.518    3  14.4 +/- 0.8   2e-09     3.0%
+    n=2    single Gaussian      28   3.0 +/- 0.3   1e-07     0.8%
+           2 Gaussians, 0.518   27   3.0 +/- 0.3   2e-07     0.8%
+    n=3    single Gaussian      26  11.2 +/- 0.3   2e-46     3.9%
+           2 Gaussians, 0.518   25   5.2 +/- 0.3   2e-16     2.0%
+
+    F-test for the second line:
+      n=1  F = 3.2,  p = 0.17     not needed
+      n=2  F = 1.0,  p = 0.32     not needed
+      n=3  F = 30.4, p = 1e-05    NEEDED
+
+WHAT IT MEANS
+  - n=3: the two-Gaussian model is clearly better (chi2_nu halves, the
+    curve sits twice as close to the spline, F-test p = 1e-5). This is
+    exactly where 2.5 says the doublet is resolved (0.20 deg splitting).
+  - n=1 and n=2: the second line is not justified by the data, as 2.5
+    predicts (0.04 and 0.09 deg splitting, inside the peak width). At n=2
+    both models are equally good; at n=1, with only 9 points, the drop in
+    chi2 is not significant.
+  - Neither model reaches chi2_nu ~ 1 in any order. Why is explained
+    below. It does not affect the comparison: both models share the same
+    shape assumption, and the F-test allows for it.
+  - So: quote the constrained two-Gaussian fit for n=3 (mu1, the
+    separation, the wavelength). For n=1 and n=2 the single Gaussian
+    describes the data as well, and its centre (the doublet centroid) is
+    the safer number.
+
+WHY ARE THE REDUCED CHI-SQUARED VALUES SO HIGH?
+Short answer: the data are precise enough to show that the real peak shape
+is not exactly a Gaussian. The error bars are right; the model shape is
+not perfect. Each possible cause was tested, as follows.
+
+  (1) ARE THE POISSON ERROR BARS TOO SMALL? No.
+      - The flat baseline points either side of each peak (no peak, only
+        counting noise) give chi2 ~ 1.3-1.5 per point (30 for 23 points at
+        n=2, 31-32 for 21 points at n=3). Badly underestimated error bars
+        would show up here too.
+      - Two INDEPENDENT scans of the n=2 peak, both Friday, 10 s per step:
+        2nd_Order_Good (1.0 mA) and 2nd_Order_High (0.6 mA). After
+        dead-time correction, one should be the other times a constant.
+        Fitting a scale factor (1.70; current ratio 1.67) and an angle
+        shift between the runs, they agree point by point with
+            chi2_nu = 1.13
+        So the counting errors are correct AND the peak shape is the same
+        from run to run.
+      - The shift needed was 0.0136 +/- 0.0011 deg: the run-to-run
+        repeatability of 4.4 (0.0143 deg), confirmed by a completely
+        separate method.
+
+  (2) THE DATA ARE VERY PRECISE. At 10 s per step the n=2 peak top is
+      ~13,000 counts, so each point is known to < 1%. The fitted curves
+      miss the measured shape by 1-4% of the peak height (the "vs spline"
+      column). A 3% miss with 1% error bars is 3 sigma per point, and
+      chi2_nu ~ 10 follows directly. With 1 s per step (error bars
+      sqrt(10) larger) the same misfit would give a chi2_nu 10x smaller.
+
+  (3) WHERE THE MISFIT IS (largest (data - model)/error, constrained fit):
+
+      n=2  50 of the 85 chi2 comes from 6 TAIL points just outside the
+           peak (+4.5, +3.8 at 33.64 and 33.74 deg; +2.8 at 32.94 deg),
+           where the data sit ABOVE the Gaussian. The real peak has
+           heavier tails than a Gaussian, mostly on the high-angle side.
+           The core fits well.
+      n=3  even with two lines, the 5 core points alternate above and
+           below the model (+4.5, -4.8, +3.9, -3.0). Each line's shape is
+           not a perfect Gaussian, and 5 points across a doublet at a
+           0.1 deg step is coarse sampling. There are also tail points
+           above the model (+4.6 at 54.74 deg).
+      n=1  only 9 points, 3 in the peak. The 0.1 deg step is about the
+           same as the peak width (sigma 0.07-0.08 deg), so the peak is
+           badly under-sampled, and the unresolved doublet distorts its
+           shape. dof is only 3-4, so chi2_nu is itself uncertain
+           (+/-0.7-0.8), but 14-22 is still far from 1.
+
+  (4) RULED OUT:
+      - ANGLE JITTER from step to step. Adding an angle error sigma_theta
+        x (slope of the peak) to each error bar would need 35-600 mdeg to
+        reach chi2_nu = 1 (repeatability is only 14 mdeg), and it cannot
+        explain misfits on the flat tails, where the slope is ~0.
+      - TUBE INTENSITY FLICKER. Adding a fraction f of the rate to each
+        error bar would need f = 30-1400%.
+      - DEAD TIME. n=2 has the same peak rate as n=1 (~1000/s raw) and
+        its core fits well.
+      - THE BASELINE. Its points scatter normally (point (1)).
+
+  (5) A BETTER SHAPE HELPS A LITTLE. A pseudo-Voigt (a mix of Gaussian
+      and Lorentzian, i.e. heavier tails) was tried as a test, not in
+      the code: chi2_nu falls from 3.0 to 2.6 at n=2 and from 5.2 to 4.5
+      at n=3. The centres change by < 0.003 deg and the n=3 separation by
+      0.001 deg, far inside the quoted errors. The remaining misfit (tail
+      asymmetry, sampling) would need a measured instrument profile.
+
+WHAT TO DO ABOUT IT
+  - Nothing more in the code. The standard response, scaling the fit
+    errors up by sqrt(chi2_nu) (3.4), is already applied.
+  - Do NOT inflate the error bars to force chi2_nu down to 1. Point (1)
+    shows they are already right; inflating them would hide a real
+    feature of the data.
+  - In the write-up: "chi2_nu >> 1 because the instrumental line profile
+    is not exactly Gaussian; baseline points and two independent scans
+    (chi2_nu = 1.13) confirm that the Poisson errors are correct."
+  - With more beam time: a finer step (0.02-0.05 deg) over the n=1 peak.
+
+A WARNING about other Friday n=2 scans: 2nd_Order, 2nd_Order_Long (both
+0.77 mA) and 2nd_Order_Long_2nd (0.9 mA) do NOT agree with the rest. Two
+scans at the same current differ in intensity by ~5x. They were probably
+taken while the setup was still being adjusted. They are not used anywhere
+in this analysis and should not be.
+
+5.12 Voigt line shape (Figure 7)
+--------------------------------
+The last block of fits_copy.py fits each peak with the standard line shape
+of X-ray diffraction, the VOIGT profile: a Gaussian (width sigma, the
+instrument: slits, beam divergence, crystal mosaic) blurred by a
+Lorentzian (half width gamma, the natural line shape and crystal effects).
+gamma = 0 gives back a plain Gaussian, so the Voigt can only fit as well
+as the Gaussian or better.
+
+    voigt(x, amplitude, mean, sigma, gamma)
+        amplitude = peak HEIGHT (scipy's voigt_profile is divided by its
+        value at the centre)
+    two_voigts_fixed_ratio(x, A1, mean_1, mean_2, sigma, gamma)
+        the same constraints as the two-Gaussian fit (5.9): I2/I1 = 0.518
+        and both lines share sigma AND gamma, so the height ratio is still
+        the area ratio
+
+Starting guesses come from the Gaussian fits, with gamma = 0.01 deg. Fits
+go through weighted_fit (3.4). NOMINAL VARIANT ONLY: this is a check of the
+line shape, not a new result, so the quoted centres and wavelengths stay
+those of the Gaussian fits (5.8-5.10).
+
+FIGURE 7: data, one Voigt, the two Voigts and their sum, for each order.
+The box on each panel gives chi2 = chi2/dof = chi2_nu +/- sqrt(2/dof) for
+both Voigt models, and for the two Gaussian models for comparison. dof =
+N - k - 2, as in chi_squared.py (5.11). The same numbers are printed.
+
+RESULTS (chi2_nu +/- error)
+
+    order  one Gaussian   one Voigt      two Gaussians  two Voigts
+    n=1    22.2 +/- 0.7   29.6 +/- 0.8   14.4 +/- 0.8   21.6 +/- 1.0
+    n=2     3.0 +/- 0.3    2.6 +/- 0.3    3.0 +/- 0.3    2.5 +/- 0.3
+    n=3    11.2 +/- 0.3   11.5 +/- 0.3    5.2 +/- 0.3    4.3 +/- 0.3
+
+    fitted Lorentzian half width gamma (two Voigts): 0.000, 0.003, 0.012 deg
+    against Gaussian sigma 0.069, 0.087, 0.087 deg
+
+WHAT IT MEANS
+  - n=1: gamma goes to 0, so the Voigt IS the Gaussian: same chi2 (88.7,
+    43.2), but one fewer dof, so a higher chi2_nu. With 9 points nothing
+    better than a Gaussian can be seen.
+  - n=2: a little Lorentzian (gamma ~0.003 deg) gives the heavier tails
+    seen in 5.11 and lowers chi2_nu from 3.0 to 2.5-2.6. One Voigt already
+    does as well as two: the doublet is not resolved here, as 2.5 says.
+  - n=3: two Voigts beat two Gaussians (5.2 -> 4.3), and both beat a
+    single line by far (the doublet is resolved). What is left is mainly
+    the ASYMMETRY of the n=3 peak (wider on the low-angle side), which a
+    symmetric Voigt cannot follow; an asymmetric ("split") profile brings
+    chi2_nu to ~1.8 in a test fit.
+  - The Lorentzian part is small (gamma is 0-14% of sigma): the peaks are
+    almost Gaussian, as expected when the instrument sets the width (2.6).
+    But it GROWS with order, for a physical reason (next part).
+
+WHY THE VOIGT HELPS MORE AT HIGHER ORDERS: THE NATURAL LINE WIDTH
+Each peak's width has two parts that behave differently with angle:
+
+  - INSTRUMENT (the Gaussian part, sigma): slits, beam divergence, crystal
+    mosaic. Roughly the same at every angle.
+  - NATURAL LINE WIDTH (the Lorentzian part, gamma): Cu K-alpha1 itself is
+    ~2.3 eV wide out of 8048 eV, a fixed fraction of its wavelength,
+    delta_lambda/lambda = 2.9e-4. Through Bragg's law (2.7) this becomes
+    an ANGLE width of
+
+        FWHM (rad) = tan(theta) * delta_lambda / lambda,   gamma = FWHM/2
+
+    so it grows with tan(theta): the crystal spreads the wavelengths out
+    more at high orders.
+
+    order  tan(theta)  predicted gamma   fitted gamma (two Voigts)
+    n=1    0.29        0.0023 deg        0.0000 +/- 0.0028 deg
+    n=2    0.66        0.0054 deg        0.0029 +/- 0.0011 deg
+    n=3    1.43        0.0117 deg        0.0118 +/- 0.0045 deg
+
+  - n=1: far below what 9 points can detect; the fit finds 0, consistent
+    with the prediction.
+  - n=2: detected, about half the prediction (2.3 sigma low).
+  - n=3: agrees with the prediction.
+  - With the Lorentzian part separated out, the instrument's Gaussian width
+    is the SAME at n=2 and n=3 (sigma = 0.087 deg both). The two-Gaussian
+    fit had to absorb the natural width into a wider sigma at n=3 (0.097
+    deg). That is a good consistency check: the instrument does not
+    change, the natural width scales with tan(theta).
+
+  So the Voigt improves the fit more at high orders because that is where
+  the Lorentzian part becomes large enough to matter, not because anything
+  about the doublet changes.
+
+  CAVEATS: at n=3 the detection is only 2.6 sigma; part of gamma may be
+  absorbing the peak's asymmetry; and 2.3 eV is an approximate natural
+  width. Quote this as "consistent with the natural line width", not as
+  a measurement of it.
+
+  Note also that chi2_nu does NOT simply improve with order (two Voigts:
+  21.6, 2.5, 4.3). Values from different scans are not directly
+  comparable: each has its own number of points per peak, count level
+  (so error-bar size) and, at n=3, an asymmetric peak. What grows with
+  order is how much the Voigt improves on the Gaussian.
+
+CHECK: THE SEPARATION AS A WAVELENGTH
+A better chi2 does not push the separation either way: mean_2 is a free
+parameter. In ANGLE the separation must grow with order,
+n delta_lambda / (2 d cos theta) (2.5); in WAVELENGTH it is fixed at
+154.44 - 154.06 = 0.38 pm. Converting each fitted separation back,
+
+    delta_lambda = 2 d cos(mean_1) * (mean_2 - mean_1) / n    (angle in rad)
+
+    order  sigma / separation   two Gaussians   two Voigts   reference
+    n=1    1.7  (hidden)        0.93 pm         0.93 pm      0.38 pm
+    n=2    1.0  (partly)        0.28 pm         0.31 pm      0.38 pm
+    n=3    0.5  (resolved)      0.387 pm        0.383 pm     0.38 pm
+
+  - n=3 measures the K-alpha splitting to ~1%.
+  - n=1 is meaningless: two lines 1.7 widths apart inside one peak cannot
+    be located separately, so the fit's separation is not a measurement
+    (its small fit error hides how strongly it trades off against the
+    width).
+  - The Voigt fit moves the n=2 AND n=3 separations towards the reference
+    (0.28 -> 0.31 pm, 0.387 -> 0.383 pm). It does not push the lines
+    closer together.
+  - Rule of thumb: a doublet separation can be measured once it is about
+    as large as the peak width (sigma / separation <~ 1).
+
+FOR THE WRITE-UP: "The doublet is resolved only at n=3, which gives
+delta_lambda = 0.383 pm (reference 0.38 pm). The Lorentzian width of the
+Voigt fits grows with order as expected for the natural line width
+(proportional to tan theta), while the instrumental Gaussian width stays
+constant at ~0.087 deg."
+  - The RESULTS barely move: mean 1 is 16.0131 / 33.2731 / 55.0711 deg
+    with two Voigts against 16.0131 / 33.2759 / 55.0703 deg with two
+    Gaussians, differences of at most 0.003 deg against a total error of
+    0.066 deg. The Gaussian results can be quoted with confidence; the
+    Voigt fit shows the line shape is not what limits them.
 
 
 ================================================================================
-PART 3 - CURRENT RESULTS (as of 2026-10-26)
+PART 6 - THE ERROR BUDGET IN ONE PLACE
 ================================================================================
 
-With dead time (tau = 164.5 +/- 5.0 us) and zero offset (0.0618 +/-
-0.0060 deg) corrected. Errors are totals of everything in 2.2a in
-quadrature. Values before the corrections are in brackets. Previous
-totals (fit, dead time and zero offset only) are given as "was".
+  source         size          how it was found              applied to
+  -------------  ------------  ----------------------------  ---------------
+  counting       sqrt(N)       Poisson (3.1)                 every point
+  fit            from pcov,    least squares, x sqrt(chi2nu)  every result
+                 scaled up     if chi2nu > 1 (3.4)
+  dead time      tau +/- 5 us  current scan (4.1)            variants
+  zero offset    0.0060 deg    direct beam, incl. shape      variants
+                               error (4.2)                   (angle shift)
+  alignment      0.0637 deg    half the roll-flip shift      variants
+                               (4.4)                         (angle shift)
+  repeatability  0.0143 deg    pooled repeat scans (4.4)     variants
+                                                             (angle shift)
+  fit range      full diff.    bremsstrahlung below 10 deg   U, lambda_min
+                               vs full range (5.6)
+  thermal        8e-5 of d     alpha x sigma_T (4.5)         wavelengths
 
-Bremsstrahlung:
-    lambda_min = 34.60 +/- 0.87 pm   (35.19)      was +/- 0.10
-    U          = 35.83 +/- 0.89 kV   (35.24)      was +/- 0.10
-    chi^2_nu = 1.84. Biggest errors: alignment 0.63 kV, fit range 0.60 kV.
-    Against the 35 kV set on the tube: 0.9 sigma (was 8 sigma).
+What dominates which result:
 
-Single Gaussian centres (deg):
-    n=1: 16.048 +/- 0.066   (16.110)
-    n=2: 33.299 +/- 0.066   (33.361)
-    n=3: 55.137 +/- 0.066   (55.198)
+    U and lambda_min          alignment (0.63 kV) and fit range (0.60 kV)
+    peak centres              alignment (0.064 deg)
+    K-alpha1 wavelength       alignment (0.60 / 0.26 / 0.12 pm at n=1/2/3)
+    doublet separation        fit error only (angle errors cancel)
+    peak heights              fit error, then dead time
 
-Constrained fit, K-alpha1 centre against Bragg's law (154.06 pm):
-    n=1: 16.013 +/- 0.066  predicted 15.852  -> +0.16 deg  (+0.22 before)
-    n=2: 33.276 +/- 0.066  predicted 33.113  -> +0.16 deg  (+0.22 before)
-    n=3: 55.070 +/- 0.066  predicted 55.029  -> +0.04 deg  (+0.10 before)
+Deliberately NOT counted, and why:
 
-K-alpha1 wavelength, lambda = 2 d sin(mu1) / n (2.10):
-    n=1: 155.59 +/- 0.62 pm   -> 2.5 sigma above 154.06
-    n=2: 154.73 +/- 0.27 pm   -> 2.5 sigma above
-    n=3: 154.14 +/- 0.12 pm   -> 0.6 sigma above   <- best value
-
-Doublet separation, constrained fit, against Bragg's-law prediction
-(unchanged: every angle error cancels):
-    n=1: 0.099 +/- 0.010 deg (predicted 0.040) -> meaningless, unresolved
-    n=2: 0.068 +/- 0.023 deg (predicted 0.092) -> agrees within 1.1 sigma
-    n=3: 0.206 +/- 0.008 deg (predicted 0.202) -> excellent agreement
-
-chi^2/dof of the peak fits (all printed): single Gaussian 14.8, 2.8, 10.4;
-constrained two-Gaussian 8.6, 2.8, 4.9. Every one is above 1, so its fit
-errors are scaled up (2.2). The n=1 values are high because the doublet
-and the peak shape are not exactly Gaussian.
-
-Dead time raises the peak heights by ~2-20% and the fitted heights
-accordingly. Its error (+/-5 us) is small next to the fit errors
-everywhere. The alignment error (+/-0.064 deg) now dominates every
-absolute angle and wavelength.
+  - The 0.1 deg STEP SIZE. A fitted centre is not stuck on the grid (the
+    fit interpolates between points), and any wobble in where the
+    goniometer actually stops is already part of the repeatability.
+  - The heated-unheated ANGLE STABILITY (0.0147 deg). Same effect as the
+    repeatability, same size: counting both would be double counting.
+  - The FIXED INTENSITY RATIO 0.518. Tested (5.9): negligible.
+  - The DEAD-TIME MODEL choice (non-paralysable vs paralysable). Changes
+    peak heights by ~6%, nothing else (4.1).
 
 
 ================================================================================
-PART 4 - KNOWN LIMITATIONS / STILL TO DO
+PART 7 - RESULTS (as of 2026-10-26)
 ================================================================================
 
-1. ANGLE CALIBRATION. The direct-beam zero offset (0.062 deg) is now
-   removed, but the K-alpha1 peaks still sit above Bragg's law by +0.16,
-   +0.16 and +0.04 deg at n = 1, 2, 3. What is left is not constant, so a
-   single zero offset cannot explain it. Possible causes: the crystal's own
-   zero (its surface not parallel to the beam at theta = 0), which the
-   direct-beam scan without the crystal cannot see; and whether the
-   direct-beam angle beta is the crystal angle theta or the detector angle
-   2 theta (if it is 2 theta, the theta offset is half, 0.031 deg).
-   Calibrating against the known Cu lines would resolve this.
-   With the alignment error included, the n=1 and n=2 residuals are
-   2.5 sigma and n=3 is 0.6 sigma, so this is no longer a gross
-   disagreement, but n=1 and n=2 are still worth explaining.
+Errors are totals of everything in Part 6, in quadrature. Values before
+the dead-time and zero-offset corrections are in brackets.
 
-2. DEAD TIME. Done: non-paralysable correction with tau = 164.5 +/- 5.0
-   us from deadtime.py (2.2). The paralysable model (tau = 110 us) fits
-   the current scan equally well and has not been tried here. At ~1000/s
-   it would correct by x1.15 instead of x1.22, so it only matters for the
-   peak HEIGHTS (~6%), not for any angle, wavelength or U.
+Bremsstrahlung (Checkmark 1)
+    lambda_min = 34.60 +/- 0.87 pm   (35.19)
+    U          = 35.83 +/- 0.89 kV   (35.24)
+    chi^2_nu = 1.84
+    error budget on U: fit 0.13, dead time 0.00, zero offset 0.06,
+                       alignment 0.63, repeatability 0.14, fit range 0.60
+    Set on the tube: 35 kV. Agreement: 0.9 sigma.
 
-3. TUNGSTEN LINES NOT MASKED. The "small line" at ~15.4 deg is most likely
-   W L-alpha1 (147.6 pm), from filament tungsten deposited on the anode.
-   Other W lines (~11.5 deg, ~13.0-13.5 deg) and the 2nd- and 3rd-order
-   images of W L-alpha (~31.8-31.9 deg and ~51.8-51.9 deg) are still
-   inside the Kramers background fit, and contribute to chi^2_nu = 1.85.
+Single-Gaussian centres (doublet centroid)
+    n=1: 16.048 +/- 0.066 deg   (16.110)
+    n=2: 33.299 +/- 0.066 deg   (33.361)
+    n=3: 55.137 +/- 0.066 deg   (55.198)
 
-4. HIGHER-ORDER BREMSSTRAHLUNG. Above ~7 deg the detector also receives
-   lambda/2 (2nd order) of the continuum. The model includes only n=1.
-   Including n=2 moves lambda_min by up to ~1.5%.
+Constrained fit, K-alpha1 centre against Bragg's law
+    n=1: 16.013 +/- 0.066 deg   predicted 15.852   +0.16 deg
+    n=2: 33.276 +/- 0.066 deg   predicted 33.113   +0.16 deg
+    n=3: 55.070 +/- 0.066 deg   predicted 55.029   +0.04 deg
 
-5. SHARP CUT-OFF. The model switches on abruptly at lambda_min, but the
-   instrument resolution (sigma ~0.085 deg) smears the real edge. Near
-   3.6 deg that is ~2.4% of lambda.
+K-alpha1 wavelength, lambda = 2 d sin(mu1) / n
+    n=1: 155.59 +/- 0.62 pm    2.5 sigma above 154.06
+    n=2: 154.73 +/- 0.27 pm    2.5 sigma above
+    n=3: 154.14 +/- 0.12 pm    0.6 sigma above      <- quote this one
 
-6. OFFSET VERSUS SCALE (2.3). The dedicated scans differ from the full scan
-   by a factor (~7x at n=2 and n=3), not a constant. Only Figure 1 is
-   affected. Cause now known: 1.0 mA against 0.12 mA (2.1). Dividing each
-   scan by its current would put them all on one scale.
+Doublet separation (K-alpha2 - K-alpha1), constrained fit
+    n=1: 0.099 +/- 0.010 deg   predicted 0.040   unresolved, meaningless
+    n=2: 0.068 +/- 0.023 deg   predicted 0.092   1.1 sigma
+    n=3: 0.206 +/- 0.008 deg   predicted 0.202   0.5 sigma, excellent
+    As a wavelength, n=3 gives 0.387 pm (Gaussians) or 0.383 pm (Voigts)
+    against 0.38 pm (5.12).
 
-7. n=1 DOUBLET UNRESOLVED. The 0.040 deg splitting is below the 0.1 deg
-   step and well inside the peak width, so mu2 - mu1 at n=1 is not
-   meaningful. Option: fix mu2 = mu1 + predicted splitting for n=1.
+Voigt fits (5.12): Lorentzian width gamma = 0.000, 0.003, 0.012 deg at
+n = 1, 2, 3, consistent with the natural line width scaling as tan(theta)
+(predicted 0.002, 0.005, 0.012 deg); instrumental sigma 0.087 deg at both
+n=2 and n=3.
 
-8. UNCERTAINTIES. Now combined (2.2a): fit, dead time, zero offset
-   (including its shape error), alignment, repeatability, the
-   bremsstrahlung fit range and the thermal error on d. The gate times
-   are read from the .xry files. Fit errors are scaled up when
-   chi^2/dof > 1.
-   Not separate errors on purpose:
-     - The 0.1 deg step size. A fitted centre is not limited to the grid,
-       and any wobble in where the goniometer stops is already in the
-       repeatability.
-     - The heated-unheated angle shift (temperature_error.py): the same
-       kind of error as repeatability, and the same size, so it would be
-       counted twice.
-     - The fixed intensity ratio 0.518. Checked: changing it to 0.50 or
-       0.53 moves mu1 by <= 0.0015 deg and the n=3 separation by
-       <= 0.0004 deg, which is negligible next to the other errors.
-   Still missing: sigma_T = 2 K is ASSUMED (use the recorded lab
-   temperature if you have it); the residual angle calibration (item 1);
-   and items 3 and 5 (items 4 and 5 are partly covered by the fit-range
-   check).
+Which peak model fits better (chi_squared.py, 5.11)
+    reduced chi^2, single Gaussian -> two Gaussians (I2/I1 = 0.518)
+    n=1: 22.2 +/- 0.7 -> 14.4 +/- 0.8   second line not significant (p 0.17)
+    n=2:  3.0 +/- 0.3 ->  3.0 +/- 0.3   second line not significant (p 0.32)
+    n=3: 11.2 +/- 0.3 ->  5.2 +/- 0.3   second line significant (p 1e-5)
+
+Calibrations
+    dead time    tau = 164.5 +/- 5.0 us
+    zero offset  0.0618 +/- 0.0060 deg
+    alignment    0.0637 deg;  repeatability 0.0143 deg (stability 0.0147)
+    expansion between heated and unheated runs: none detected,
+    delta_d/d < 4.5e-4 (2 sigma)
+
+HOW TO READ THESE
+  - The voltage agrees with the 35 kV setting once the angle errors and
+    the fit-range systematic are included. Earlier versions quoted
+    +/-0.10 kV (fit only) and so appeared to disagree by 8 sigma: the
+    disagreement was an underestimated error, not new physics.
+  - The doublet separation at n=3 is the strongest result: it tests
+    Bragg's law and the Cu K-alpha splitting at the 4% level and is immune
+    to every angle-calibration problem.
+  - The n=3 wavelength agrees with the reference. The n=1 and n=2 values
+    are 2.5 sigma high: the leftover angle offset (Part 9, item 1).
+  - The peak fits have chi^2_nu of 3-22. That is the peak SHAPE (not
+    exactly Gaussian), seen because the data are precise; the error bars
+    were checked and are right (5.11).
 
 
+================================================================================
+PART 8 - DECISION LOG
+================================================================================
+
+One line per choice: what, why, what was rejected. Section in brackets.
+
+  Calibrations imported, not typed in      cannot go stale            (FILE MAP)
+  Non-paralysable dead time                standard for GM; models fit
+                                           equally; only heights care  (4.1)
+  Direct dead-time fit, not 1/R line       1/R distorts the weights    (4.1)
+  Dead-time correct the direct beam        Gaussian cannot fit the
+                                           squashed top otherwise      (4.2)
+  Centroid vs Gaussian as shape error      beam not Gaussian; centre
+                                           depends on model            (4.2)
+  Pooled repeatability                     2-run std devs unreliable   (4.4)
+  Half the ROLL shift as alignment error   flip reverses tilt; yaw
+                                           too badly misaligned        (4.4)
+  Alignment as error, not correction       corrections pull Bragg and
+                                           U in opposite directions    (4.4)
+  Fit shifts vs tan(theta), not per line   separates expansion from
+                                           angle drift                 (4.5)
+  Stability not added to repeatability     same effect: double count   (4.5)
+  Errors from RAW counts                   subtraction removes no
+                                           noise                       (3.1)
+  One-count floor                          avoid infinite weight       (3.1)
+  Scale errors up only if chi2_nu > 1      Poisson is a hard floor     (3.4)
+  Systematics by variants, not error bars  shared errors don't average
+                                           down                        (3.6)
+  Select points by measured angle          same points in all variants (5.3)
+  Angle errors as shifts of every angle    exact; cancels in
+                                           differences                 (5.4)
+  Whole-spectrum Kramers fit               uses all 553 points; edge
+                                           extrapolation too unstable  (5.6)
+  Full difference for fit range            two analyses, neither known
+                                           to be right                 (5.6)
+  Straight-line baseline on flanks only    simplest; can't eat peak    (5.7)
+  Spline for display only                  fitting a spline invents
+                                           data                        (3.8)
+  Makima spline                            no ringing, max between pts (5.7)
+  Gaussian peaks, not Voigt                natural width 20x smaller   (2.6)
+  Shared width + fixed ratio               free fit unstable and
+                                           unphysical                  (5.9)
+  mu2 left free                            lets the data measure the
+                                           splitting                   (5.9)
+  Quote n=3 wavelength, don't average      least angle-sensitive;
+                                           correlated errors           (5.10)
+  chi2 against data, not spline            spline = data at the points;
+                                           extra points are invented   (5.11)
+  F-test for the second line               models are nested           (5.11)
+  Voigt fits as a check, not the result    centres move <= 0.003 deg;
+                                           Gaussian results stand      (5.12)
+  Keep Poisson error bars despite          two independent scans agree
+  chi2_nu >> 1                             at chi2_nu = 1.13; cause is
+                                           peak shape                  (5.11)
+
+
+================================================================================
+PART 9 - LIMITATIONS AND NEXT STEPS
+================================================================================
+
+1. LEFTOVER ANGLE OFFSET. After removing the 0.062 deg zero offset, the
+   K-alpha1 peaks still sit above Bragg's law by +0.16, +0.16, +0.04 deg
+   (n = 1, 2, 3). With the alignment error included these are 2.5, 2.5 and
+   0.6 sigma: no longer a gross disagreement, but n=1 and n=2 need
+   explaining. It is not a constant, so a single zero offset cannot be the
+   whole story. Candidates:
+     - the CRYSTAL's own zero, which the direct-beam scan cannot see (4.2);
+     - whether the direct-beam angle is theta or 2 theta (4.2);
+     - a small error in the tube voltage display, which would trade off
+       against the angle scale in Checkmark 1 (4.4).
+   Next step: use the known Cu lines themselves as the calibration. Fit
+   the measured centres of K-alpha AND K-beta in all orders with
+   theta_measured = arcsin(n lambda / 2d) + theta_0 (+ maybe a scale
+   term). That finds the crystal's zero from the data.
+
+2. TUNGSTEN LINES IN THE BACKGROUND. W L-alpha1 at n=1 is masked, but other
+   W lines and the 2nd/3rd-order images of W L-alpha (~31.8 and ~51.8 deg)
+   are still inside the Kramers fit and add to chi^2_nu = 1.84. Masking
+   them is easy: add their windows to peak_windows.
+
+3. HIGHER-ORDER BREMSSTRAHLUNG above 7.05 deg is not in the model. The
+   fit-range check (5.6) covers its effect on lambda_min empirically. A
+   model with an n=2 term would be the proper fix.
+
+4. SHARP CUT-OFF. The model switches on abruptly at lambda_min, but the
+   instrument resolution (sigma ~0.085 deg, ~2.4% of the angle at 3.6 deg)
+   smears the real edge. Convolving the model with a Gaussian of the
+   measured width would fix it. Partly covered by the fit-range check.
+
+5. FIGURE 1 OVERLAY uses an offset; dividing by the current would be
+   right (5.5). Display only.
+
+6. n=1 DOUBLET UNRESOLVED (0.040 deg splitting, below the width). mu2 - mu1
+   at n=1 is meaningless. Option: fix mu2 = mu1 + predicted split at n=1.
+
+7. ASSUMED NUMBERS: sigma_T = 2 K (4.5). Use the recorded lab
+   temperature if there is one.
+
+8. THE n=1 CLOSE-UP SCAN is only 1 deg wide (4 flank points). A wider scan
+   would give a much better baseline.
+
+9. ALIGNMENT AT HIGH ANGLE is extrapolated: the flipped scans stop at
+   30 deg, so the 0.0637 deg is assumed to hold at 33 and 55 deg (justified
+   by b = 0 in 4.4, but not measured).
+
+
+================================================================================
+PART 10 - GLOSSARY
+================================================================================
+
+  bremsstrahlung    smooth X-ray continuum from electrons slowing down
+  centroid          intensity-weighted mean position, model-free
+  chi^2_nu          chi-squared per degree of freedom; ~1 means good fit
+  correlated errors errors shared between results; don't average down
+  coupled mode      detector arm turns at twice the crystal angle
+  dead time (tau)   time a GM tube is blind after each count
+  dof               degrees of freedom = points - fitted parameters
+  doublet           two lines very close together (K-alpha1, K-alpha2)
+  Duane-Hunt law    lambda_min = hc/(eU), shortest bremsstrahlung wavelength
+  FWHM              full width at half maximum = 2.355 sigma for a Gaussian
+  gate time         counting time per angle step (1 s or 10 s here)
+  goniometer        the turntable carrying crystal and detector
+  Kramers' law      theoretical shape of the bremsstrahlung spectrum
+  makima            modified Akima spline; smooth, no overshoot
+  mosaic spread     small misorientations of blocks inside a real crystal
+  order (n)         which multiple of lambda satisfies Bragg's law
+  pcov              covariance matrix of fitted parameters
+  Poisson noise     sqrt(N) scatter of a count N
+  quadrature        sqrt(a^2 + b^2 + ...): how independent errors add
+  systematic error  shared by every point; does not shrink with more data
+  variant           a full rerun with one input moved by +/-1 sigma
+  zero offset       angle reading at the true zero of the angle scale
+
+  Main variables in fits_copy.py
+    measured_full, measured_n1/2/3   raw (angle, rate) of each scan
+    scans[variant][key]              corrected (measured angle, true angle,
+                                     rate, error) for each variant and scan
+    background_fits[variant]         Kramers fit (popt, perr, chi2_nu)
+    peaks[variant]                   baseline-free (angle, rate, error, tilt)
+    gaussian_fits, two_gaussian_fits,
+    ratio_fits [variant]             fits per order
+    error_sources, variants          the systematic-error machinery (5.4)
+    report()                         prints value +/- total (breakdown)
+    weighted_fit()                   curve_fit with the scaling rule (3.4)

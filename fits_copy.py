@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from scipy.interpolate import Akima1DInterpolator
+from scipy.special import voigt_profile
 
 # Calibrations and systematic errors, each worked out in its own file (run that file to see its fits and plots):
 #   deadtime.py           tau, tau_err                 GM-tube dead time (tube-current scan)
@@ -491,3 +492,91 @@ for i, n in enumerate([1, 2, 3]):
                             {"thermal": np.array([wavelength * thermal_d_over_d])})[0]
     print(f"               reference 154.06 pm (Bragg angle {np.degrees(np.arcsin(n * 154.06 / (2 * d_NaCl))):.3f} "
           f"deg): {(wavelength - 154.06) / wavelength_err:+.1f} sigma")
+
+
+# Copy 5 of the peak subplots: Voigt line shape, one Voigt and two Voigts
+# The Gaussian fits have chi2/dof well above 1 because the real peaks have slightly heavier tails than a Gaussian.
+# A Voigt profile is a Gaussian (width sigma: the instrument - slits, divergence, crystal mosaic) convolved with a
+# Lorentzian (half width gamma: the natural line shape and crystal effects), the standard line shape for X-ray
+# diffraction peaks. gamma = 0 gives back the Gaussian. The two-Voigt fit has the same constraints as the
+# two-Gaussian one: I2/I1 = 0.518 and both lines share sigma and gamma, so the height ratio is still the area ratio.
+# Nominal variant only: this checks the line shape; the quoted results stay those of the Gaussian fits above.
+def voigt(x, amplitude, mean, sigma, gamma):
+    return amplitude * voigt_profile(x - mean, sigma, gamma) / voigt_profile(0, sigma, gamma)
+
+
+def two_voigts_fixed_ratio(x, amplitude_1, mean_1, mean_2, sigma, gamma):
+    return voigt(x, amplitude_1, mean_1, sigma, gamma) + voigt(x, amplitude_ratio * amplitude_1, mean_2, sigma, gamma)
+
+
+# Starting guesses from the Gaussian fits, with a small Lorentzian part. Returns the parameters and fit errors of
+# the single Voigt [amplitude, mean, sigma, gamma] and of the two Voigts [A1, mean_1, mean_2, sigma, gamma].
+def fit_voigts(peak, popt_g, popt_2g):
+    peak_angle, peak_rate, peak_sigma, _ = peak
+    popt_1, pcov_1, _ = weighted_fit(voigt, peak_angle, peak_rate, peak_sigma,
+                                     p0=[popt_g[0], popt_g[1], popt_g[2], 0.01],
+                                     bounds=([0, peak_angle.min(), 1e-4, 0], [np.inf, peak_angle.max(), 1, 1]))
+    popt_2, pcov_2, _ = weighted_fit(two_voigts_fixed_ratio, peak_angle, peak_rate, peak_sigma,
+                                     p0=[popt_2g[0], popt_2g[1], popt_2g[4], popt_2g[2], 0.01],
+                                     bounds=([0, peak_angle.min(), peak_angle.min(), 1e-4, 0],
+                                             [np.inf, peak_angle.max(), peak_angle.max(), 1, 1]))
+    return popt_1, np.sqrt(np.diag(pcov_1)), popt_2, np.sqrt(np.diag(pcov_2))
+
+
+# chi^2 against the measured points and its dof, which also counts the 2 parameters of the flank baseline fitted to
+# the same points (as in chi_squared.py). If the model were right, chi2/dof would scatter about 1 by sqrt(2/dof).
+# tex=True writes chi and +/- as symbols for the figure.
+def chi2_text(name, model, params, peak, tex=False):
+    peak_angle, peak_rate, peak_sigma, _ = peak
+    chi2 = np.sum(((peak_rate - model(peak_angle, *params)) / peak_sigma) ** 2)
+    dof = len(peak_rate) - len(params) - 2
+    chi, pm = ("$\\chi^2$", "$\\pm$") if tex else ("chi2", "+/-")
+    return f"{name}: {chi} = {chi2:.1f}/{dof} = {chi2 / dof:.2f} {pm} {np.sqrt(2 / dof):.2f}"
+
+
+voigt_fits = [fit_voigts(peak, popt_g, popt_2g) for peak, (popt_g, _, _), (popt_2g, _, _, _)
+              in zip(peaks["nominal"], gaussian_fits["nominal"], ratio_fits["nominal"])]
+for label, peak, (popt_1, perr_1, popt_2, perr_2), (popt_g, _, _), (popt_2g, _, _, _) in zip(
+        order_labels, peaks["nominal"], voigt_fits, gaussian_fits["nominal"], ratio_fits["nominal"]):
+    print(f"{label} Voigt fits (nominal variant, fit errors only):")
+    print(f"    one Voigt:  mean = {popt_1[1]:.4f} +/- {perr_1[1]:.4f} deg, sigma = {popt_1[2]:.4f} deg, "
+          f"gamma = {popt_1[3]:.4f} deg")
+    print(f"    two Voigts: mean 1 = {popt_2[1]:.4f} +/- {perr_2[1]:.4f} deg, mean 2 = {popt_2[2]:.4f} +/- "
+          f"{perr_2[2]:.4f} deg, sigma = {popt_2[3]:.4f} deg, gamma = {popt_2[4]:.4f} deg")
+    for text in [chi2_text("one Voigt    ", voigt, popt_1, peak),
+                 chi2_text("two Voigts   ", two_voigts_fixed_ratio, popt_2, peak),
+                 chi2_text("one Gaussian ", gaussian, popt_g, peak),
+                 chi2_text("two Gaussians", two_gaussians_fixed_ratio, popt_2g[[0, 1, 4, 2]], peak)]:
+        print(f"    {text}")
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 6))
+for ax, colour, label, peak, (popt_1, _, popt_2, _), (popt_g, _, _), (popt_2g, _, _, _) in zip(
+        axes, colours, order_labels, peaks["nominal"], voigt_fits, gaussian_fits["nominal"], ratio_fits["nominal"]):
+    peak_angle, peak_rate, peak_sigma, _ = peak
+    angle_smooth = np.linspace(peak_angle.min(), peak_angle.max(), 2000)
+    ax.errorbar(peak_angle, peak_rate, yerr=peak_sigma, fmt=".", color=colour, markersize=5, capsize=2, label="Data")
+    ax.plot(angle_smooth, voigt(angle_smooth, *popt_1), "-.", color="0.4", linewidth=1.2, label="One Voigt")
+    ax.plot(angle_smooth, voigt(angle_smooth, *popt_2[[0, 1, 3, 4]]), ":", color="tab:red", linewidth=1.2,
+            label="Voigt 1 (K-alpha1)")
+    ax.plot(angle_smooth, voigt(angle_smooth, amplitude_ratio * popt_2[0], *popt_2[[2, 3, 4]]), ":",
+            color="tab:purple", linewidth=1.2, label="Voigt 2 (K-alpha2)")
+    ax.plot(angle_smooth, two_voigts_fixed_ratio(angle_smooth, *popt_2), "k--", linewidth=1.2, label="Sum of Voigts")
+    ax.axhline(0, color="k", linewidth=0.5)
+    ax.set_ylim(top=1.9 * peak_rate.max())  # headroom for the legend and annotation
+    ax.legend(loc="upper left", fontsize=8)
+    ax.text(0.98, 0.98, "\n".join([chi2_text("One Voigt", voigt, popt_1, peak, tex=True),
+                                   chi2_text("Two Voigts", two_voigts_fixed_ratio, popt_2, peak, tex=True),
+                                   "Gaussians, for comparison:",
+                                   chi2_text("  one", gaussian, popt_g, peak, tex=True),
+                                   chi2_text("  two", two_gaussians_fixed_ratio, popt_2g[[0, 1, 4, 2]], peak,
+                                             tex=True)]),
+            transform=ax.transAxes, ha="right", va="top", multialignment="left", fontsize=7,
+            bbox=dict(boxstyle="round", facecolor="white", edgecolor="0.7"))
+    ax.set_title(f"{label} scan")
+    ax.set_xlabel("Bragg angle, zero offset removed (deg)")
+    ax.grid(alpha=0.3)
+axes[0].set_ylabel("Count rate, background subtracted (1/s)")
+fig.suptitle(f"Cu K-alpha peaks, dead-time corrected: one Voigt and two Voigts (I2/I1 = {amplitude_ratio}, "
+             f"shared $\\sigma$ and $\\gamma$)")
+fig.tight_layout()
+plt.show()
