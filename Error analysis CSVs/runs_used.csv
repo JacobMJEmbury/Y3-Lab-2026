@@ -1,0 +1,9 @@
+analysis,run,source_file,column,U_kV,I_mA,dwell_s,beta_min_deg,beta_max_deg,n_points,note
+alignment,normal_thu_0.6mA,Thursday/Angle_fixed/High Peak/Cu_NaCl_long_3.5Kpeak.xry,1,35.0,0.6,1.0,2.5,66.7,643,"normal orientation, Thursday after angle fix"
+alignment,normal_thu_0.12mA,Thursday/Angle_fixed/Low Peak/Cu_NaCl_long_1.2KPeak.xry,1,35.0,0.12,1.0,2.5,62.3,599,"normal orientation, Thursday after angle fix (repeat)"
+alignment,flipped_roll,Friday/Task3/Flipped_Roll.xry,1,35.0,1.0,1.0,2.5,30.0,276,crystal flipped about roll axis
+alignment,flipped_yaw,Friday/Task3/Flipped_Yaw.xry,1,35.0,1.0,1.0,2.5,30.0,276,crystal flipped about yaw axis
+alignment,normal_fri_0.12mA,Friday/Task2/1st_Order_high_and_low.xry,1,35.0,0.12,10.0,14.5,18.0,36,"normal orientation, Friday, same day as flipped scans"
+alignment,normal_fri_0.6mA,Friday/Task2/1st_Order_high_and_low.xry,2,35.0,0.6,10.0,14.5,18.0,36,"normal orientation, Friday, same day as flipped scans"
+temperature,unheated,Tuesday/Cu_NaCl_mono_full.xry,1,35.0,1.0,1.0,2.5,78.2,758,room temperature
+temperature,heated,Tuesday/Cu_NaCl_mono_full_heated.xry,1,35.0,1.0,1.0,2.5,78.0,756,heated
