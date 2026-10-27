@@ -2,7 +2,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-from save_figure import save_figure
+from save_figure import save_figure, report_style
 
 # Dead time of the GM tube from a tube-current scan (Cu anode, NaCl crystal, goniometer held at one angle).
 # The true photon rate is proportional to the emission current, N = k * I. A GM tube is blind for a time tau
@@ -55,31 +55,22 @@ if __name__ == "__main__":
     for measured in [100, 1090, rate.max()]:
         print(f"    R = {measured:6.0f} 1/s  ->  x{1 / (1 - measured * tau):.3f}")
 
+    # Only the non-paralysable fit is drawn: the GM tube is self-quenching, so it is non-paralysable.
+    # The paralysable fit and the linearised line are still printed above as cross-checks.
+    plt.rcParams.update(report_style)
     current_fine = np.linspace(0, current.max() * 1.05, 500)
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    axes[0].errorbar(current, rate, yerr=sigma, fmt="k.", markersize=6, capsize=2, label="Measured")
-    axes[0].plot(current_fine, k * current_fine, "k:", linewidth=1, label=f"True rate, N = kI (k = {k:.0f} 1/s per mA)")
-    for (label, (model, popt_m, perr_m, _)), style in zip(fits.items(), ["r-", "b--"]):
-        axes[0].plot(current_fine, model(current_fine, *popt_m), style, linewidth=1.5,
-                     label=f"{label}, $\\tau$ = {popt_m[1] * 1e6:.0f} $\\pm$ {perr_m[1] * 1e6:.0f} $\\mu$s")
-    axes[0].set_ylim(0, 1.3 * rate.max())
-    axes[0].set_xlabel("Emission current (mA)")
-    axes[0].set_ylabel("Count rate (1/s)")
-    axes[0].set_title("Count rate against tube current")
-    axes[0].legend(fontsize=8)
-    axes[0].grid(alpha=0.3)
-
-    inv_current_fine = np.linspace(0, 1.05 / current.min(), 500)
-    axes[1].plot(1 / current, 1 / rate, "k.", markersize=6, label="Measured")
-    axes[1].plot(inv_current_fine, slope * inv_current_fine + intercept, "r-", linewidth=1.5,
-                 label=f"Straight line, intercept $\\tau$ = {intercept * 1e6:.0f} $\\mu$s")
-    axes[1].set_xlabel("1 / current (1/mA)")
-    axes[1].set_ylabel("1 / count rate (s)")
-    axes[1].set_title("Linearised non-paralysable model")
-    axes[1].legend(fontsize=8)
-    axes[1].grid(alpha=0.3)
-    fig.suptitle("GM tube dead time from the tube-current scan (Cu anode, NaCl crystal): "
-                 "non-paralysable and paralysable fits")
+    model, popt, perr, _ = fits["Non-paralysable"]
+    fig, ax = plt.subplots(figsize=(9, 6.5))
+    ax.errorbar(current, rate, yerr=sigma, fmt="ko", markersize=4, capsize=2, label="Data")
+    ax.plot(current_fine, k * current_fine, "k:", linewidth=1, label=f"N = kI (k = {k:.0f} /s per mA)")
+    ax.plot(current_fine, model(current_fine, *popt), "r-", linewidth=1.5,
+            label=f"Non-paralysable, $\\tau$ = {popt[1] * 1e6:.0f} $\\pm$ {perr[1] * 1e6:.0f} $\\mu$s")
+    ax.set_ylim(0, 1.3 * rate.max())
+    ax.set_xlabel("Current (mA)")
+    ax.set_ylabel("Count rate (/s)")
+    ax.set_title("Detector deadtime")
+    ax.legend(loc="lower right")
+    ax.grid(alpha=0.3)
     fig.tight_layout()
     save_figure("calib_1_deadtime", fig)
     plt.show()

@@ -470,6 +470,11 @@ The rule used in fits_copy.py (function weighted_fit) is a mix:
     unknown. They are now read from the .xry files, so the error bars can
     be trusted.
 
+For the peak fits, chi^2_nu here uses dof = points - parameters - 2: the
+straight baseline under each peak (5.7) was fitted to the same points, so
+it used up 2 degrees of freedom (5.11). The bremsstrahlung fit has no such
+baseline, so its dof is points - parameters.
+
 deadtime.py and angle_offset.py still use curve_fit's default
 (absolute_sigma=False). Their chi^2_nu are 5.7 and 26, both above 1, so
 the result is the same as the rule above.
@@ -607,7 +612,7 @@ CHOICES AND WHY
   - A direct non-linear fit rather than the straight line 1/R = (1/k)(1/I)
     + tau. Taking 1/R distorts the error bars (the small rates at low
     current dominate) and the straight-line fit here is unweighted. It is
-    printed and plotted only as a cross-check; it gives 179.5 us, in the
+    printed only as a cross-check; it gives 179.5 us, in the
     same region.
   - chi^2_nu = 5.7 > 1, so the error on tau is scaled up by sqrt(5.7)
     (curve_fit's default does this). Possible causes: current not exactly
@@ -663,13 +668,19 @@ CHOICES AND WHY
     background level; the fit uses all the points. Either would do; the
     difference is already in the error.
 
-WATCH OUT (important, unresolved): the direct beam locates the zero of the
-DETECTOR arm. The Bragg peaks are set mainly by the CRYSTAL angle, and the
+UNITS (settled): every run, the direct-beam scan included, was a coupled
+scan, so beta is the crystal angle theta and the detector sits at 2 beta.
+The peak at beta = 0.062 deg is where the detector, at 2 x 0.062 = 0.124
+deg on its own scale, looks straight down the beam: the coupled drive's
+zero is off by 0.062 deg in theta. So the full 0.062 deg is subtracted
+from theta, as fits_copy.py does. (Had beta been the detector angle
+2 theta, only half of it would apply.)
+
+WATCH OUT (unresolved): the direct beam locates the zero of the DETECTOR
+arm. The Bragg peaks are set mainly by the CRYSTAL angle, and the
 crystal's own zero (is its face exactly along the beam at theta = 0?)
-cannot be seen with the crystal removed. Whether the 0.062 deg applies
-fully to theta, or half of it (if the scan's angle was the detector angle
-2 theta), depends on the scan mode, which the CSV does not record. See
-Part 9, item 1.
+cannot be seen with the crystal removed. Subtracting the offset from theta
+assumes the crystal shares the coupled drive's zero. See Part 9, item 1.
 
 HANDS TO fits_copy.py:  zero_offset, zero_offset_err.
 
@@ -874,15 +885,17 @@ the both-ways test gives only 0.0018 deg, so the shape change hardly moves
 the shift itself. K-beta keeps its shape better (chi^2_nu 7.1 and 1.4) but
 gives a shift 0.02 deg larger (1.9 sigma apart). See Part 9.
 
-FIGURE calib_3_alignment_error.png, three panels:
-  left    the 1st-order region: the turned scan (points), the normal scan
-          before the shift (dotted, scaled to the same height) and after it
-          (solid); the K-alpha fit window shaded
-  middle  the K-alpha n=1 window close up, residuals underneath
-  right   chi^2 against trial shift, divided by max(chi^2_nu, 1) so that
-          the "+1" line gives the statistical error: K-alpha both ways
-          round, K-beta one way as the cross-check, the result as a band,
-          and a text box with the shift and sigma_align
+FIGURE calib_3_alignment_error.png, one panel: the K-alpha n=1 peak from
+15.7 deg up, with the turned scan (points, solid Gaussian fit) and the
+normal scan (points, dotted Gaussian fit), neither shifted, and a text box
+with the overlay shift between them. The normal scan is scaled to the
+turned one's fitted peak height, since the turned crystal reflects ~2.3x
+less. The single Gaussians are for display only (the doublet is not one
+Gaussian, and the turned peak's flat top fits it badly); their centres
+differ by -0.113 deg, close to the overlay's -0.109 deg, which is the one
+used. A dotted line marks each fitted centre and the gap between them is
+shaded red, as in calib_2. The fit window, residuals and chi^2 curve are
+not drawn.
 
 CHOICES AND WHY
   - HALF the shift: the turn reverses eps, so normal = true + eps and
@@ -935,7 +948,12 @@ again as a cross-check only. Tuesday is before the angle fix, so its peaks
 sit ~0.12 deg higher: both windows are moved up by 0.12 deg
 (tuesday_offset in peak_overlay.py). Only the shift BETWEEN the two runs is
 used, so any offset common to both cancels. The figure,
-calib_4_temperature_error.png, has the same three panels as calib_3.
+calib_4_temperature_error.png, is one panel: the K-alpha n=1 peak from
+15.7 deg up with the heated and unheated scans as measured (no shift, no
+scaling; both are 1 mA, 1 s), each with a display-only single Gaussian, and
+a text box with the overlay shift between them. The Gaussian centres differ
+by -0.015 deg, against the overlay's -0.014 deg; a dotted line marks each
+centre and the gap between them is shaded red.
 
 RESULT (negative = heated peak at lower angle):
     K-alpha n=1  shift = -0.0140 +/- 0.0038 deg
@@ -1085,7 +1103,9 @@ interpolated with np.interp) over the points outside the peak.
 
     Offsets removed: n=1 -2.54/s, n=2 +14.50/s, n=3 +5.09/s
 
-FIGURE 1: all four scans, dead-time and zero-offset corrected, error bars.
+FIGURE 1: all four scans, dead-time and zero-offset corrected, error bars,
+each labelled with its tube current. The full scan is left out over the
+range of the n=2 and n=3 close-ups, so each of those peaks is drawn once.
 
 CAVEAT: the n=2 and n=3 close-ups are ~7x more intense than the full scan
 (n=2 peak 1090/s against 169/s). The reason is the current, 1.0 mA against
@@ -1200,7 +1220,7 @@ FIGURE 3: the three baseline-free peaks with their splines.
 -----------------------------------
 gaussian(x, amplitude, mean, sigma), fitted through weighted_fit with the
 raw-count errors. Start: height = highest point, centre = its angle, width
-0.1 deg. chi^2_nu printed: 14.8, 2.8, 10.4 for n = 1, 2, 3.
+0.1 deg. chi^2_nu (dof = N - 3 - 2, 3.4): 22.2, 3.0, 11.2 for n = 1, 2, 3.
 
 What it means: the peak is really the K-alpha1 + K-alpha2 doublet, so one
 Gaussian finds the intensity-weighted CENTRE of the pair. Compare it with
@@ -1227,6 +1247,10 @@ FREE FIT (Figure 5), two_gaussians: all six parameters free.
     than K-alpha1 with huge errors; at n=2 the second Gaussian shrinks to
     A2 ~ 7/s off to one side. Do not quote it. Its failure is the reason
     for the constrained fit.
+  - Figure 5 draws the data, the two Gaussians labelled K-alpha1 (the one
+    at the lower angle) and K-alpha2, and their sum ("superposed double
+    Gaussian"). The parameters with their total errors are printed, not
+    drawn.
 
 CONSTRAINED FIT (Figure 6), two_gaussians_fixed_ratio: free A1, mu1, mu2
 and one shared sigma (4 parameters, not 6):
@@ -1250,33 +1274,44 @@ and one shared sigma (4 parameters, not 6):
     at most 0.0015 deg and the n=3 separation by at most 0.0004 deg. That
     is negligible against the other errors, so no error is added for it.
 
-chi^2_nu printed: 8.6, 2.8, 4.9. Still above 1 (the peak shape is not
+chi^2_nu (dof = N - 4 - 2): 14.4, 3.0, 5.2. Still above 1 (the peak shape is not
 exactly two Gaussians, and n=1 has only 9 points), so errors are scaled up
 (3.4). Results are expanded back to six numbers [A1, mu1, sigma, 0.518 A1,
 mu2, sigma] so Figure 6 is drawn the same way as Figure 5.
 
-MU_1 ERROR BUDGET BOX ON FIGURE 6. Each panel lists every error on the
-K-alpha1 centre mu_1 (from error_budget(), 5.4), in deg:
+MU_1 ERROR BUDGET FOR FIGURE 6 (printed by fits_copy.py; it used to be a
+box on each panel). Every error on the K-alpha1 centre mu_1 (from
+error_budget(), 5.4), in deg:
 
     order   fit     dead time  zero offset  alignment  heating  total
-    n=1     0.0039  0.0001     0.0060       0.0544     0.0140   0.0567
-    n=2     0.0079  0.0002     0.0060       0.0544     0.0140   0.0571
-    n=3     0.0041  0.0000     0.0060       0.0544     0.0140   0.0567
+    n=1     0.0051  0.0001     0.0060       0.0544     0.0140   0.0568
+    n=2     0.0082  0.0002     0.0060       0.0544     0.0140   0.0571
+    n=3     0.0043  0.0000     0.0060       0.0544     0.0140   0.0567
 
-    WHY show it: it makes plain on the figure itself that the alignment
-    error, not the fit, sets the error on every peak position.
+    WHY it matters: the alignment error, not the fit, sets the error on
+    every peak position.
 
-EXPECTED POSITIONS ON FIGURES 6 AND 7 (function mark_expected)
+LAYOUT OF FIGURES 5, 6 AND 8: the data points are grey and the sum of the
+two lines is a solid black curve. Each panel is centred on that order's single-Gaussian centre and
+spans the same number of single-Gaussian sigmas each side as the 1st-order
+scan does (about 4.9, plus 5%), so the 2nd and 3rd order peaks fill their
+panels the way the 1st-order peak does (peak_xlims). The legends are 25%
+smaller than the rest of the text, and clear_legends raises each panel's
+y-axis until the legend covers no data point or curve.
+
+EXPECTED POSITIONS ON FIGURES 5, 6 AND 8 (function mark_expected)
 Each panel also shows where Bragg's law says the two lines SHOULD be:
 
-  - DOTTED VERTICAL LINES at bragg_angle(n, lambda) = arcsin(n lambda/2d)
+  - DASH-DOT VERTICAL LINES at bragg_angle(n, lambda) = arcsin(n lambda/2d)
     for K-alpha1 (154.06 pm, red) and K-alpha2 (154.44 pm, purple), the
     same colours as the fitted lines they belong to.
   - An ARROW from each expected angle to the top of the matching fitted
-    line, at that line's height. Its length is fitted - expected.
-  - The value of fitted - expected is in the legend, not on the arrow: at
-    n=2 and n=3 the arrows are only 0.04-0.16 deg long on a 3 deg axis,
-    too short to carry a readable label.
+    line, at that line's height, on every panel. Its length is fitted -
+    expected. (On Figure 5 at n=2 the free fit's K-alpha2 is a 7.5/s bump,
+    so its arrow runs along the baseline.)
+  - The value of fitted - expected is not drawn: at n=2 and n=3 the arrows
+    are only 0.04-0.16 deg long, too short to carry a readable label.
+    Figures 6 and 8 print it.
 
     fitted - expected (deg)       K-alpha1        K-alpha2
                                 Gauss  Voigt    Gauss  Voigt
@@ -1339,9 +1374,9 @@ CHOICES AND WHY
   - dof = N - k - 2, not N - k: the straight baseline (slope, intercept)
     was fitted to the flanks of these same points (5.7), so it used up 2
     degrees of freedom. The Kramers background came from the full scan, a
-    different data set, so it costs nothing here. (fits_copy.py's
-    weighted_fit uses N - k for its error scaling, so its printed chi2_nu
-    are slightly lower: e.g. 14.8 against 22.2 for n=1 with 9 points.)
+    different data set, so it costs nothing here. fits_copy.py's
+    weighted_fit uses the same dof when it scales the fit errors up (3.4),
+    so its chi2_nu and these are the same numbers.
   - THE ERROR ON chi2_nu is sqrt(2/dof): if the model were right and the
     only scatter were counting noise, chi2_nu would scatter about 1 by
     this much. So a chi2_nu more than ~2 of these errors from 1 means the
@@ -1550,13 +1585,13 @@ Each peak's width has two parts that behave differently with angle:
     more at high orders.
 
     order  tan(theta)  predicted gamma   fitted gamma (two Voigts)
-    n=1    0.29        0.0023 deg        0.0000 +/- 0.0028 deg
-    n=2    0.66        0.0054 deg        0.0029 +/- 0.0011 deg
-    n=3    1.43        0.0117 deg        0.0118 +/- 0.0045 deg
+    n=1    0.29        0.0023 deg        0.0000 +/- 0.0040 deg
+    n=2    0.66        0.0054 deg        0.0029 +/- 0.0012 deg
+    n=3    1.43        0.0117 deg        0.0118 +/- 0.0046 deg
 
   - n=1: far below what 9 points can detect; the fit finds 0, consistent
     with the prediction.
-  - n=2: detected, about half the prediction (2.3 sigma low).
+  - n=2: detected, about half the prediction (2.1 sigma low).
   - n=3: agrees with the prediction.
   - With the Lorentzian part separated out, the instrument's Gaussian width
     is the SAME at n=2 and n=3 (sigma = 0.087 deg both). The two-Gaussian
@@ -1621,8 +1656,18 @@ by most diffraction software: a weighted SUM (not a convolution) of a
 Gaussian and a Lorentzian of the same FWHM,
 
     pseudo_voigt(x, amplitude, mean, fwhm, eta)
-        = amplitude * [eta * L + (1 - eta) * G],  both of unit height
+        = amplitude * [eta * L + (1 - eta) * G] / (its value at the centre)
+        L, G both of unit AREA, so eta is the Lorentzian's share of the
+        area (the Thompson-Cox-Hastings definition); amplitude is still
+        the peak height
         eta = 0 pure Gaussian, eta = 1 pure Lorentzian
+
+    WHY unit area: voigt_fwhm_eta (below) gives the TCH eta, which is
+    defined for unit-area L and G. An earlier version mixed unit-HEIGHT L
+    and G, a different eta for the same curve (the Lorentzian is the lower
+    of the two at equal area), so its fitted eta could not be compared with
+    the TCH value. The fitted curves, chi2 and centres are identical either
+    way; only the meaning of eta changes.
     two_pseudo_voigts_fixed_ratio(x, A1, mean_1, mean_2, fwhm, eta)
         same constraints as 5.12: I2/I1 = 0.518, shared fwhm AND eta
 
@@ -1633,23 +1678,26 @@ pseudo-Voigt (Thompson, Cox and Hastings 1987); the Voigt fits of 5.12
 give the starting guesses and the comparison. NOMINAL VARIANT ONLY, as in
 5.12.
 
-FIGURE 8: as Figure 7 with pseudo-Voigts; the box adds the fitted eta and
-the Voigt chi2 for comparison. The printout gives each pseudo-Voigt
+FIGURE 8: data, the two pseudo-Voigts (K-alpha1, K-alpha2) and their sum,
+with the expected Bragg angles (arrows on n=1 and n=2 only). The single
+pseudo-Voigt and the number box are not drawn: each order's chi2 for one
+and two pseudo-Voigts and Voigts, the fitted eta, and fitted - expected
+for each line are printed. The printout also gives each pseudo-Voigt
 result with the Voigt equivalent in brackets, and the change from Voigt
 to pseudo-Voigt in units of the pseudo-Voigt fit error.
 
 RESULTS (two lines, I2/I1 = 0.518)
 
     order  chi2_nu: Voigt  pseudo-V   eta fitted     eta from Voigt
-    n=1    21.6 +/- 1.0    21.6       0.000 +/- 0.031  0.000
-    n=2     2.50 +/- 0.28   2.53      0.024 +/- 0.010  0.038
-    n=3     4.27 +/- 0.29   4.47      0.088 +/- 0.038  0.142
+    n=1    21.6 +/- 1.0    21.6       0.000 +/- 0.064  0.000
+    n=2     2.50 +/- 0.28   2.53      0.036 +/- 0.014  0.038
+    n=3     4.27 +/- 0.29   4.47      0.124 +/- 0.054  0.142
 
     order  mean 1 shift   separation (deg)          delta_lambda (pm)
            pV - Voigt     pseudo-V         Voigt    pseudo-V        Voigt
-    n=1    +0.0000        0.0986 +/- 0.0120 0.0986  0.933            0.933
-    n=2    +0.0004        0.0747 +/- 0.0162 0.0759  0.307 +/- 0.067  0.312
-    n=3    -0.0001        0.2045 +/- 0.0067 0.2039  0.384 +/- 0.013  0.383
+    n=1    +0.0000        0.0986 +/- 0.0169 0.0986  0.933            0.933
+    n=2    +0.0004        0.0747 +/- 0.0168 0.0759  0.307 +/- 0.069  0.312
+    n=3    -0.0001        0.2045 +/- 0.0070 0.2039  0.384 +/- 0.013  0.383
 
 WHAT IT MEANS
   - NO MEASUREMENT CHANGES. Every centre moves by <= 0.0004 deg (<= 0.07
@@ -1661,11 +1709,12 @@ WHAT IT MEANS
     against 0.38 pm) for both shapes alike: it is not a line-shape
     problem but the unresolved doublet (5.12).
   - n=2, n=3: the true Voigt fits slightly better (n=3: chi2 102.5 against
-    107.3 for the same dof), and the fitted eta comes out ~35% below the
-    eta implied by the Voigt. With one shared width the pseudo-Voigt
-    cannot reproduce the Voigt's tails exactly; the extra freedom of
-    separate sigma and gamma is worth a little chi2 at n=3.
-  - eta GROWS with order (0, 0.024, 0.088), the same trend as gamma in
+    107.3 for the same dof): with one shared width the pseudo-Voigt cannot
+    reproduce the Voigt's tails exactly, and the extra freedom of separate
+    sigma and gamma is worth a little chi2 at n=3. The fitted eta agrees
+    with the eta implied by the Voigt (0.036 against 0.038, 0.124 against
+    0.142, both well inside the fit error).
+  - eta GROWS with order (0, 0.036, 0.124), the same trend as gamma in
     5.12: the Lorentzian share rises as the natural width spreads out with
     tan(theta). The pseudo-Voigt sees the trend but cannot say whether it
     comes from the instrument or the line; the Voigt can, which is why the
@@ -1751,14 +1800,14 @@ Constrained fit, K-alpha1 centre against Bragg's law
      fit 0.004-0.008 deg; Figure 6)
 
 K-alpha1 wavelength, lambda = 2 d sin(mu1) / n
-    n=1: 155.59 +/- 0.54 pm    2.9 sigma above 154.06
-    n=2: 154.73 +/- 0.23 pm    2.9 sigma above
+    n=1: 155.59 +/- 0.54 pm    2.8 sigma above 154.06
+    n=2: 154.73 +/- 0.24 pm    2.9 sigma above
     n=3: 154.14 +/- 0.11 pm    0.7 sigma above      <- quote this one
 
 Doublet separation (K-alpha2 - K-alpha1), constrained fit
-    n=1: 0.099 +/- 0.010 deg   predicted 0.040   unresolved, meaningless
-    n=2: 0.068 +/- 0.023 deg   predicted 0.092   1.1 sigma
-    n=3: 0.206 +/- 0.008 deg   predicted 0.202   0.5 sigma, excellent
+    n=1: 0.099 +/- 0.013 deg   predicted 0.040   unresolved, meaningless
+    n=2: 0.068 +/- 0.024 deg   predicted 0.092   1.0 sigma
+    n=3: 0.206 +/- 0.008 deg   predicted 0.202   0.4 sigma, excellent
     As a wavelength, n=3 gives 0.387 pm (Gaussians) or 0.383 pm (Voigts)
     against 0.38 pm (5.12).
 
@@ -1791,7 +1840,7 @@ HOW TO READ THESE
     Bragg's law and the Cu K-alpha splitting at the 4% level and is immune
     to every angle-calibration problem.
   - The n=3 wavelength agrees with the reference. The n=1 and n=2 values
-    are 2.9 sigma high: the leftover angle offset (Part 9, item 1).
+    are 2.8-2.9 sigma high: the leftover angle offset (Part 9, item 1).
   - The peak fits have chi^2_nu of 3-22. That is the peak SHAPE (not
     exactly Gaussian), seen because the data are precise; the error bars
     were checked and are right (5.11).
@@ -1878,12 +1927,11 @@ PART 9 - LIMITATIONS AND NEXT STEPS
 
 1. LEFTOVER ANGLE OFFSET. After removing the 0.062 deg zero offset, the
    K-alpha1 peaks still sit above Bragg's law by +0.16, +0.16, +0.04 deg
-   (n = 1, 2, 3). With the alignment error included these are 2.9, 2.9 and
+   (n = 1, 2, 3). With the alignment error included these are 2.8, 2.9 and
    0.7 sigma (Part 7): no longer a gross disagreement, but n=1 and n=2 need
    explaining. It is not a constant, so a single zero offset cannot be the
    whole story. Candidates:
      - the CRYSTAL's own zero, which the direct-beam scan cannot see (4.2);
-     - whether the direct-beam angle is theta or 2 theta (4.2);
      - a small error in the tube voltage display, which would trade off
        against the angle scale in Checkmark 1 (4.4).
    Next step: use the known Cu lines themselves as the calibration. Fit

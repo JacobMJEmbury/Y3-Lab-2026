@@ -2,7 +2,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-from save_figure import save_figure
+from save_figure import save_figure, report_style
 from deadtime import tau, tau_err
 
 # Zero-angle offset of the goniometer from a direct-beam scan (Cu anode, no NaCl crystal).
@@ -79,24 +79,28 @@ if __name__ == "__main__":
           f"the {step:.1f} deg step size limits how well the angle itself is set")
     print(f"Correct measured angles with beta_true = beta_measured - ({zero_offset:+.4f} deg)")
 
+    # Only the raw (not dead-time corrected) peak is drawn. Its Gaussian centre agrees with the corrected one to
+    # 1e-4 deg, so the quoted beta_0 (from the corrected fit, with all its errors) is the offset of this peak too.
+    plt.rcParams.update(report_style)
+    y_raw, sigma_raw, popt_raw, _, _ = fits["Raw"]
+    centre_raw, peak_raw = popt_raw[1], gaussian(popt_raw[1], *popt_raw)
     beta_fine = np.linspace(beta.min(), beta.max(), 1000)
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    for ax, yscale in zip(axes, ["linear", "log"]):
-        for (label, (y_m, sigma_m, popt_m, _, _)), colour in zip(fits.items(), ["grey", "k"]):
-            ax.errorbar(beta, y_m, yerr=sigma_m, fmt=".", color=colour, markersize=5, capsize=2, label=label)
-            ax.plot(beta_fine, gaussian(beta_fine, *popt_m), "-", color="r" if colour == "k" else "b", linewidth=1.2,
-                    label=f"{label} fit, centre = {popt_m[1]:+.3f}$\\degree$")
-        ax.axvline(0, color="k", linestyle=":", linewidth=1)
-        ax.axvline(zero_offset, color="r", linestyle="--", linewidth=1)
-        ax.set_yscale(yscale)
-        ax.set_xlabel("Angle $\\beta$ (deg)")
-        ax.set_ylabel("Count rate (1/s)")
-        ax.legend(fontsize=8)
-        ax.grid(alpha=0.3)
-    axes[0].set_title("Direct beam")
-    axes[1].set_title("Direct beam, log scale")
-    fig.suptitle(f"Goniometer zero offset from the direct-beam scan (Cu anode, no crystal): $\\beta_0$ = {zero_offset:+.3f} $\\pm$ "
-                 f"{zero_offset_err:.3f}$\\degree$")
+    fig, ax = plt.subplots(figsize=(9, 6.5))
+    ax.errorbar(beta, y_raw, yerr=sigma_raw, fmt="ko", markersize=4, capsize=2, label="Data")
+    ax.plot(beta_fine, gaussian(beta_fine, *popt_raw), "b-", linewidth=1.5, label="Gaussian fit")
+    # The gap between true zero and the fitted centre is the offset, shaded red
+    ax.axvline(0, color="k", linestyle=":", linewidth=1.5)
+    ax.axvline(centre_raw, color="r", linestyle=":", linewidth=1.5)
+    ax.axvspan(0, centre_raw, color="r", alpha=0.3, linewidth=0)
+    ax.annotate(f"Peak offset angle\n{zero_offset:+.3f} $\\pm$ {zero_offset_err:.3f}°",
+                xy=(centre_raw, peak_raw), xytext=(0.7, 0.9 * peak_raw),
+                arrowprops=dict(arrowstyle="->", color="k", linewidth=1.5))
+    ax.set_ylim(top=1.15 * peak_raw)
+    ax.set_xlabel("Angle (deg)")
+    ax.set_ylabel("Count rate (/s)")
+    ax.set_title("Goniometer zero offset")
+    ax.legend(loc="upper left")
+    ax.grid(alpha=0.3)
     fig.tight_layout()
     save_figure("calib_2_zero_offset", fig)
     plt.show()

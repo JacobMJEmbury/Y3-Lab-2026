@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from save_figure import save_figure
-from peak_overlay import load, overlay_shift, shift_text, plot_overlay, windows
+from save_figure import save_figure, report_style
+from peak_overlay import (load, overlay_shift, shift_text, windows, first_order_region, figure_start,
+                          plot_pair, shift_box_text)
 
 # Crystal-alignment systematic on the Bragg angle. The only misalignment that moves the peaks to first order is a
 # tilt epsilon of the lattice planes about the VERTICAL axis (the goniometer axis): it adds straight onto the angle,
@@ -34,11 +35,17 @@ if __name__ == "__main__":
         print(f"    Kα n={n} at ~{theta:.0f} deg: sigma_d/d = cot(theta) * sigma_align = "
               f"{np.radians(sigma_align) / np.tan(np.radians(theta)):.1e}")
 
-    fig = plot_overlay(normal, flipped, ("normal", "flipped 180$^\\circ$ about beam axis"), results, 0,
-                       f"shift = {results['Kα n=1']['shift']:+.4f} $\\pm$ {results['Kα n=1']['err']:.4f}$^\\circ$\n"
-                       f"$\\sigma_{{align}}$ = |shift| / 2 = {sigma_align:.4f} $\\pm$ {sigma_align_err:.4f}$^\\circ$",
-                       "Crystal alignment: crystal turned 180$^\\circ$ about the beam axis, overlaid on the normal "
-                       "scan (1 s per step, 0.6 vs 1 mA)\nThe flip reverses the tilt about the vertical axis, so the "
-                       "peaks move by twice the misalignment")
+    # The normal scan and the flipped one from 15.7 deg up, each with a Gaussian fit and its centre marked, neither
+    # shifted, and the Kα n=1 overlay shift between them. The flipped crystal reflects much less (its corrected peak
+    # is ~2.3x lower despite 1 vs 0.6 mA), so the normal scan is scaled to the flipped one's fitted peak height.
+    plt.rcParams.update(report_style)
+    fig, gaussian_fits = plot_pair(normal, flipped, ["Normal (scaled to the same height)",
+                                                     "Flipped 180° about beam axis"],
+                                   (figure_start, first_order_region[1]),
+                                   shift_box_text("flipped", "normal", results["Kα n=1"]), scale_reference=True)
+    (normal_popt, normal_perr), (flipped_popt, flipped_perr) = gaussian_fits
+    print(f"Gaussian centres in the figure (one Gaussian each, display only): normal {normal_popt[1]:.4f} +/- "
+          f"{normal_perr[1]:.4f}, flipped {flipped_popt[1]:.4f} +/- {flipped_perr[1]:.4f}, difference "
+          f"{flipped_popt[1] - normal_popt[1]:+.4f} deg")
     save_figure("calib_3_alignment_error", fig)
     plt.show()

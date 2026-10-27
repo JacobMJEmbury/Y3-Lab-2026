@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
-from save_figure import save_figure
-from peak_overlay import load, overlay_shift, shift_text, plot_overlay, windows, tuesday_offset
+from save_figure import save_figure, report_style
+from peak_overlay import (load, overlay_shift, shift_text, windows, first_order_region, figure_start, tuesday_offset,
+                          plot_pair, shift_box_text)
 
 # Heating systematic on the Bragg angle. Two full scans on Tuesday with identical settings (1 mA, 1 s, 0.1 deg step),
 # one with the NaCl crystal at room temperature and one with it heated by the lamp. The shift of the 1st-order Kα
@@ -27,9 +28,16 @@ if __name__ == "__main__":
     print(f"Heating error: sigma_heat = |Kα n=1 shift| = {sigma_heat:.4f} +/- {sigma_heat_err:.4f} deg")
     print(f"    Kβ n=1 cross-check gives {abs(results['Kβ n=1']['shift']):.4f} deg")
 
-    fig = plot_overlay(unheated, heated, ("unheated", "heated"), results, tuesday_offset,
-                       f"$\\sigma_{{heat}}$ = |shift| = {sigma_heat:.4f} $\\pm$ {sigma_heat_err:.4f}$^\\circ$",
-                       "Crystal heating: heated scan overlaid on the unheated one (Tuesday, both 1 mA and 1 s per "
-                       "step)\nAngles are Tuesday's, before the angle fix; only the shift between the runs is used")
+    # Both runs from 15.7 deg up, each with a Gaussian fit and its centre marked, unshifted and unscaled (same current
+    # and dwell), and the Kα n=1 overlay shift between them. Angles are Tuesday's, before the angle fix, so the peaks
+    # sit ~0.12 deg high.
+    plt.rcParams.update(report_style)
+    fig, gaussian_fits = plot_pair(unheated, heated, ["Unheated", "Heated"],
+                                   (figure_start, first_order_region[1] + tuesday_offset),
+                                   shift_box_text("heated", "unheated", results["Kα n=1"]))
+    (unheated_popt, unheated_perr), (heated_popt, heated_perr) = gaussian_fits
+    print(f"Gaussian centres in the figure (one Gaussian each, display only): unheated {unheated_popt[1]:.4f} +/- "
+          f"{unheated_perr[1]:.4f}, heated {heated_popt[1]:.4f} +/- {heated_perr[1]:.4f}, difference "
+          f"{heated_popt[1] - unheated_popt[1]:+.4f} deg")
     save_figure("calib_4_temperature_error", fig)
     plt.show()
