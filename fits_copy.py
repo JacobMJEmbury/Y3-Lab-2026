@@ -581,11 +581,14 @@ voigt_chi2 = [{"one Voigt": chi2_dof(voigt, popt_1, peak),
                "two Gaussians": chi2_dof(two_gaussians_fixed_ratio, popt_2g[[0, 1, 4, 2]], peak)}
               for peak, (popt_1, _, popt_2, _), (popt_g, _, _), (popt_2g, _, _, _)
               in zip(peaks["nominal"], voigt_fits, gaussian_fits["nominal"], ratio_fits["nominal"])]
-# Reduced chi^2 of the two-line fits in the order they are plotted (all free, then I2/I1 fixed with a shared width),
-# with its expected scatter sqrt(2/dof)
+# Reduced chi^2 of each fit, with its expected scatter sqrt(2/dof): first the single-line fits (one Gaussian, one
+# Voigt; printed only, not plotted), then the two-line fits in the order they are plotted (all free, then I2/I1 fixed
+# with a shared width)
 for label, peak, (popt_free, _, _), chi2s in zip(order_labels, peaks["nominal"], two_gaussian_fits["nominal"],
                                                  voigt_chi2):
-    for name, (chi2, dof) in [("two Gaussians, all free", chi2_dof(two_gaussians, popt_free, peak)),
+    for name, (chi2, dof) in [("one Gaussian", chi2s["one Gaussian"]),
+                              ("one Voigt", chi2s["one Voigt"]),
+                              ("two Gaussians, all free", chi2_dof(two_gaussians, popt_free, peak)),
                               ("two Gaussians, I2/I1 fixed", chi2s["two Gaussians"]),
                               ("two Voigts, I2/I1 fixed", chi2s["two Voigts"])]:
         print(f"{label}, {name}: chi2/dof = {chi2:.1f}/{dof} = {chi2 / dof:.2f} +/- {np.sqrt(2 / dof):.2f}")

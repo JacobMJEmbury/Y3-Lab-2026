@@ -2,7 +2,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-from save_figure import save_figure, report_style
+from save_figure import save_figure, calib_style
 from deadtime import tau, tau_err
 
 # Zero-angle offset of the goniometer from a direct-beam scan (Cu anode, no NaCl crystal).
@@ -81,7 +81,7 @@ if __name__ == "__main__":
 
     # Only the raw (not dead-time corrected) peak is drawn. Its Gaussian centre agrees with the corrected one to
     # 1e-4 deg, so the quoted beta_0 (from the corrected fit, with all its errors) is the offset of this peak too.
-    plt.rcParams.update(report_style)
+    plt.rcParams.update(calib_style)
     y_raw, sigma_raw, popt_raw, _, _ = fits["Raw"]
     centre_raw, peak_raw = popt_raw[1], gaussian(popt_raw[1], *popt_raw)
     beta_fine = np.linspace(beta.min(), beta.max(), 1000)

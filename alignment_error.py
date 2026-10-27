@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from save_figure import save_figure, report_style
+from save_figure import save_figure, calib_style
 from peak_overlay import (load, overlay_shift, shift_text, windows, first_order_region, figure_start,
                           plot_pair, shift_box_text)
 
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     # The normal scan and the flipped one from 15.7 deg up, each with a Gaussian fit and its centre marked, neither
     # shifted, and the Kα n=1 overlay shift between them. The flipped crystal reflects much less (its corrected peak
     # is ~2.3x lower despite 1 vs 0.6 mA), so the normal scan is scaled to the flipped one's fitted peak height.
-    plt.rcParams.update(report_style)
+    plt.rcParams.update(calib_style)
     fig, gaussian_fits = plot_pair(normal, flipped, ["Normal (scaled to the same height)",
                                                      "Flipped 180° about beam axis"],
                                    (figure_start, first_order_region[1]),

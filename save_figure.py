@@ -12,6 +12,8 @@ report_text_size = 15  # pt
 report_style = {key: report_text_size for key in ["font.size", "axes.titlesize", "axes.labelsize", "xtick.labelsize",
                                                   "ytick.labelsize", "legend.fontsize", "legend.title_fontsize",
                                                   "figure.titlesize"]}
+# The calibration figures (calib_1 to calib_4) are the exception: their titles are double the report size.
+calib_style = {**report_style, "axes.titlesize": 2 * report_text_size}
 
 
 def save_figure(name, fig=None):

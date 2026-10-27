@@ -2,7 +2,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-from save_figure import save_figure, report_style
+from save_figure import save_figure, calib_style
 
 # Dead time of the GM tube from a tube-current scan (Cu anode, NaCl crystal, goniometer held at one angle).
 # The true photon rate is proportional to the emission current, N = k * I. A GM tube is blind for a time tau
@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
     # Only the non-paralysable fit is drawn: the GM tube is self-quenching, so it is non-paralysable.
     # The paralysable fit and the linearised line are still printed above as cross-checks.
-    plt.rcParams.update(report_style)
+    plt.rcParams.update(calib_style)
     current_fine = np.linspace(0, current.max() * 1.05, 500)
     model, popt, perr, _ = fits["Non-paralysable"]
     fig, ax = plt.subplots(figsize=(9, 6.5))

@@ -117,7 +117,7 @@ def fit_gaussian(scan, span):
 # other scan red), a dotted line through each fitted centre with the gap between them shaded red (as in calib_2), and
 # a text box with offset_text. With scale_reference the reference (points and fit) is scaled to the other scan's
 # fitted peak height, for scans of different intensity; only the peak positions matter here.
-# Text sizes come from report_style in save_figure.py. Returns the figure and each scan's (popt, perr).
+# Text sizes come from calib_style in save_figure.py. Returns the figure and each scan's (popt, perr).
 def plot_pair(reference, scan, labels, span, offset_text, scale_reference=False):
     fits = [fit_gaussian(one_scan, span) for one_scan in (reference, scan)]
     peak_heights = [gaussian(popt[1], *popt) for popt, _ in fits]

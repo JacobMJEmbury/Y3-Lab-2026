@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-from save_figure import save_figure, report_style
+from save_figure import save_figure, calib_style
 from peak_overlay import (load, overlay_shift, shift_text, windows, first_order_region, figure_start, tuesday_offset,
                           plot_pair, shift_box_text)
 
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     # Both runs from 15.7 deg up, each with a Gaussian fit and its centre marked, unshifted and unscaled (same current
     # and dwell), and the Kα n=1 overlay shift between them. Angles are Tuesday's, before the angle fix, so the peaks
     # sit ~0.12 deg high.
-    plt.rcParams.update(report_style)
+    plt.rcParams.update(calib_style)
     fig, gaussian_fits = plot_pair(unheated, heated, ["Unheated", "Heated"],
                                    (figure_start, first_order_region[1] + tuesday_offset),
                                    shift_box_text("heated", "unheated", results["Kα n=1"]))
