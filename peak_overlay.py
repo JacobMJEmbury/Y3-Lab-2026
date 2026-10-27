@@ -118,7 +118,7 @@ def fit_gaussian(scan, span):
 # a text box with offset_text. With scale_reference the reference (points and fit) is scaled to the other scan's
 # fitted peak height, for scans of different intensity; only the peak positions matter here.
 # Text sizes come from calib_style in save_figure.py. Returns the figure and each scan's (popt, perr).
-def plot_pair(reference, scan, labels, span, offset_text, scale_reference=False):
+def plot_pair(reference, scan, labels, span, offset_text, scale_reference=False, title="1st order region"):
     fits = [fit_gaussian(one_scan, span) for one_scan in (reference, scan)]
     peak_heights = [gaussian(popt[1], *popt) for popt, _ in fits]
     scales = [peak_heights[1] / peak_heights[0] if scale_reference else 1, 1]
@@ -140,7 +140,7 @@ def plot_pair(reference, scan, labels, span, offset_text, scale_reference=False)
     ax.set_ylim(top=1.5 * max(peak_heights[1], scales[0] * peak_heights[0]))
     ax.set_xlabel("Angle (deg)")
     ax.set_ylabel("Count rate (/s)")
-    ax.set_title("1st order region")
+    ax.set_title(title)
     ax.grid(alpha=0.3)
     fig.tight_layout()
     return fig, fits

@@ -34,7 +34,8 @@ if __name__ == "__main__":
     plt.rcParams.update(calib_style)
     fig, gaussian_fits = plot_pair(unheated, heated, ["Unheated", "Heated"],
                                    (figure_start, first_order_region[1] + tuesday_offset),
-                                   shift_box_text("heated", "unheated", results["Kα n=1"]))
+                                   shift_box_text("heated", "unheated", results["Kα n=1"]),
+                                   title="Source Heating Error")
     (unheated_popt, unheated_perr), (heated_popt, heated_perr) = gaussian_fits
     print(f"Gaussian centres in the figure (one Gaussian each, display only): unheated {unheated_popt[1]:.4f} +/- "
           f"{unheated_perr[1]:.4f}, heated {heated_popt[1]:.4f} +/- {heated_perr[1]:.4f}, difference "
